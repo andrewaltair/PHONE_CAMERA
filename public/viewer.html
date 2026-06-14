@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iPhone live — PC viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #07090d; color: #e8ecf3;
+    font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #stage { flex: 1; min-height: 0; display: grid; place-items: center; position: relative; }
+  video { max-width: 100%; max-height: 100%; background: #000; border-radius: 6px; }
+  #hint { position: absolute; color: #5b6678; font-size: 16px; text-align: center; padding: 20px; }
+  .panel { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
+    padding: 8px 14px; border-top: 1px solid #161b26; }
+  #hud { font: 13px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; color: #7fd1b9; }
+  .grp { display: flex; gap: 6px; align-items: center; }
+  .grp > label { color: #8b95a7; font-size: 12px; }
+  button, select { padding: 6px 10px; border: 1px solid #263043; border-radius: 8px;
+    background: #121826; color: #cbd5e1; font-size: 13px; cursor: pointer; }
+  button.on { background: #2b6cff; border-color: #2b6cff; color: #fff; }
+  #cam { display: none; }                    /* shown once the phone reports capabilities */
+  input[type=range] { width: 120px; }
+  #status { padding: 6px 14px; font-size: 12px; color: #8b95a7; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="hint">Waiting for phone…<br>open the phone URL in Safari and tap "Start streaming".<br>
+      <small>(open this viewer in Chrome/Edge for full low-latency support)</small></div>
+    <video id="remote" autoplay playsinline controls></video>
+  </div>
+
+  <!-- camera controls — populated from the phone's real capabilities -->
+  <div id="cam" class="panel">
+    <div class="grp"><label>quality</label>
+      <select id="quality">
+        <option value="640,480,30">480p · 30</option>
+        <option value="1280,720,30" selected>720p · 30</option>
+        <option value="1280,720,60">720p · 60 (smoothest)</option>
+        <option value="1920,1080,30">1080p · 30 (sharpest)</option>
+      </select>
+    </div>
+    <div class="grp"><label>bitrate</label>
+      <select id="bitrate">
+        <option value="2000000">2 Mbps</option>
+        <option value="6000000" selected>6 Mbps</option>
+        <option value="12000000">12 Mbps</option>
+      </select>
+    </div>
+    <div class="grp" id="lensWrap" style="display:none"><label>lens</label><select id="lens"></select></div>
+    <div class="grp" id="zoomWrap" style="display:none"><label>zoom</label><input type="range" id="zoom"></div>
+    <button id="torch" style="display:none">🔦 torch</button>
+  </div>
+
+  <!-- latency panel -->
+  <div class="panel">
+    <div id="hud">RTT –  ·  jbuf –  ·  – fps  ·  loss –</div>
+    <div class="grp" style="margin-left:auto"><label>jitter buffer</label>
+      <button data-ms="0">0</button><button data-ms="30">30</button><button data-ms="80">80 ms</button>
+    </div>
+  </div>
+  <div id="status">viewer: idle</div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const log  = (t) => { $('status').textContent = 'viewer: ' + t; console.log('[viewer]', t); };
+const hint = (show) => { $('hint').style.display = show ? '' : 'none'; };
+const hud  = (t) => { $('hud').textContent = t; };
+
+const WS = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+let pc, ws;
+let JB_MS = 0;
+
+function ctl(o) { if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(Object.assign({ type: 'control' }, o))); }
+
+function applyJB() {
+  if (!pc) return;
+  for (const r of pc.getReceivers())
+    if (r.track && r.track.kind === 'video') {
+      try { r.jitterBufferTarget = JB_MS; } catch (e) {}
+      try { r.playoutDelayHint = JB_MS / 1000; } catch (e) {}
+    }
+}
+
+// --- camera controls -> relayed to the phone
+$('quality').onchange = (e) => { const [w, h, fps] = e.target.value.split(',').map(Number); ctl({ action: 'quality', w, h, fps }); };
+$('bitrate').onchange = (e) => ctl({ action: 'bitrate', bps: Number(e.target.value) });
+$('lens').onchange    = (e) => ctl({ action: 'device', deviceId: e.target.value });
+$('zoom').oninput     = (e) => ctl({ action: 'zoom', value: Number(e.target.value) });
+let torchOn = false;
+$('torch').onclick    = () => { torchOn = !torchOn; $('torch').classList.toggle('on', torchOn); ctl({ action: 'torch', value: torchOn }); };
+
+// build/refresh the control panel from the phone's reported capabilities
+function applyCaps(caps, devices) {
+  $('cam').style.display = 'flex';
+  if (devices && devices.length > 1) {
+    $('lensWrap').style.display = '';
+    $('lens').innerHTML = devices.map((d) => `<option value="${d.deviceId}">${d.label}</option>`).join('');
+  } else $('lensWrap').style.display = 'none';
+  if (caps && caps.zoom && caps.zoom.max) {
+    $('zoomWrap').style.display = '';
+    const z = caps.zoom; $('zoom').min = z.min; $('zoom').max = z.max; $('zoom').step = z.step || 0.1;
+    if (!$('zoom').value) $('zoom').value = z.min;
+  } else $('zoomWrap').style.display = 'none';
+  $('torch').style.display = (caps && caps.torch) ? '' : 'none';
+}
+
+// JB buttons
+for (const b of document.querySelectorAll('[data-ms]')) {
+  b.onclick = () => { JB_MS = Number(b.dataset.ms); document.querySelectorAll('[data-ms]').forEach((x) => x.classList.toggle('on', x === b)); applyJB(); log('jitter buffer = ' + JB_MS + ' ms'); };
+  if (Number(b.dataset.ms) === JB_MS) b.classList.add('on');
+}
+
+const f = (n) => (n == null || isNaN(n) ? '–' : Math.round(n));
+async function pollStats() {
+  if (!pc) return;
+  let rtt, jbuf, fps, loss;
+  (await pc.getStats()).forEach((r) => {
+    if (r.type === 'inbound-rtp' && r.kind === 'video') {
+      if (r.jitterBufferDelay != null && r.jitterBufferEmittedCount) jbuf = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000;
+      fps = r.framesPerSecond; loss = r.packetsLost;
+    }
+    if (r.type === 'candidate-pair' && r.nominated && r.currentRoundTripTime != null) rtt = r.currentRoundTripTime * 1000;
+  });
+  hud(`RTT ${f(rtt)} ms  ·  jbuf ${f(jbuf)} ms  ·  ${f(fps)} fps  ·  loss ${loss ?? '–'}  ·  target ${JB_MS} ms`);
+}
+setInterval(pollStats, 1000);
+
+function newPC() {
+  if (pc) { try { pc.close(); } catch (e) {} }
+  pc = new RTCPeerConnection(RTC_CFG);
+  pc.ontrack = (e) => { $('remote').srcObject = e.streams[0]; hint(false); applyJB(); $('remote').play().catch(() => log('live — click the video for audio')); log('live'); };
+  pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
+  pc.onconnectionstatechange = () => log(pc.connectionState);
+}
+
+function connectWS() {
+  ws = new WebSocket(WS);
+  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'viewer' })); log('connected — waiting for phone…'); };
+  ws.onclose = () => log('signaling closed — reload to retry');
+  ws.onerror = () => log('signaling error');
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'offer') {
+      newPC();
+      await pc.setRemoteDescription(msg.sdp);
+      await pc.setLocalDescription(await pc.createAnswer());
+      applyJB();
+      ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+      log('answered — connecting…');
+    } else if (msg.type === 'ice' && msg.candidate) {
+      try { await pc.addIceCandidate(msg.candidate); } catch (e) {}
+    } else if (msg.type === 'caps') {
+      applyCaps(msg.caps, msg.devices);
+    } else if (msg.type === 'peer-left') {
+      log('phone disconnected'); hint(true); $('cam').style.display = 'none';
+    }
+  };
+}
+connectWS();
+</script>
+</body>
+</html>

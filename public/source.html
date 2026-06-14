@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>iphone source</title>
+<style>
+  /* Clean receive-only page for OBS Browser Source / screen capture. No UI, just the frame. */
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  video { width: 100vw; height: 100vh; object-fit: contain; background: #000; display: block; }
+</style>
+</head>
+<body>
+<video id="v" autoplay playsinline muted></video>
+<script>
+// Muted on purpose: a video SOURCE (OBS / virtual camera) is video-only; route the iPhone mic
+// separately (VB-CABLE) if you need audio. Auto-reconnects so it survives server restarts.
+const WS = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+let pc, ws;
+
+function newPC() {
+  if (pc) { try { pc.close(); } catch (e) {} }
+  pc = new RTCPeerConnection(RTC_CFG);
+  pc.ontrack = (e) => {
+    const v = document.getElementById('v');
+    v.srcObject = e.streams[0];
+    v.play().catch(() => {});
+    for (const r of pc.getReceivers()) {
+      if (r.track && r.track.kind === 'video') {
+        try { r.jitterBufferTarget = 0; } catch (e) {}
+        try { r.playoutDelayHint = 0; } catch (e) {}
+      }
+    }
+  };
+  pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
+}
+
+function connect() {
+  ws = new WebSocket(WS);
+  ws.onopen = () => ws.send(JSON.stringify({ type: 'join', role: 'viewer' }));
+  ws.onclose = () => setTimeout(connect, 1000);   // keep the OBS source alive across restarts
+  ws.onmessage = async (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'offer') {
+      newPC();
+      await pc.setRemoteDescription(m.sdp);
+      await pc.setLocalDescription(await pc.createAnswer());
+      ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+    } else if (m.type === 'ice' && m.candidate) {
+      try { await pc.addIceCandidate(m.candidate); } catch (e) {}
+    }
+  };
+}
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "name": "phone-camera",
+  "version": "1.0.0",
+  "description": "Turn your iPhone into a low-latency wireless webcam for your PC over WebRTC — no app, no Mac, built from scratch.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "webrtc",
+    "iphone",
+    "webcam",
+    "virtual-camera",
+    "obs",
+    "ios",
+    "camera",
+    "streaming",
+    "low-latency",
+    "getusermedia",
+    "wireless-webcam"
+  ],
+  "author": "Andrew Altair",
+  "license": "MIT",
+  "homepage": "https://github.com/andrewaltair/PHONE_CAMERA#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrewaltair/PHONE_CAMERA.git"
+  },
+  "bugs": {
+    "url": "https://github.com/andrewaltair/PHONE_CAMERA/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  }
+}
