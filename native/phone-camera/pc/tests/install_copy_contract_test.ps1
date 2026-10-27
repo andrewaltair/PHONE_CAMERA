@@ -106,6 +106,24 @@ try {
     Microsoft.PowerShell.Management\Remove-Item -LiteralPath Function:\Start-Process -Force -ErrorAction SilentlyContinue
 }
 
+$firewallFunction = @($ast.FindAll({ param($node) $node.GetType().Name -eq 'FunctionDefinitionAst' -and $node.Name -eq 'Invoke-FirewallCommand' }, $true))
+if ($firewallFunction.Count -ne 1) { throw 'Missing Invoke-FirewallCommand helper.' }
+$mockExitCode = 0
+function netsh.exe { $global:LASTEXITCODE = $script:mockExitCode }
+try {
+    $fwText = $firewallFunction[0].Extent.Text
+    $success = & ([scriptblock]::Create("$fwText; Invoke-FirewallCommand @('mock') `$true"))
+    if (-not $success) { throw 'Firewall helper did not report mocked success.' }
+    $mockExitCode = 1
+    $optional = & ([scriptblock]::Create("$fwText; Invoke-FirewallCommand @('mock') `$false"))
+    if ($optional) { throw 'Firewall helper reported optional mocked failure as success.' }
+    $blocked = $false
+    try { & ([scriptblock]::Create("$fwText; Invoke-FirewallCommand @('mock') `$true")) } catch { $blocked = $true }
+    if (-not $blocked) { throw 'Firewall helper did not block required mocked failure.' }
+} finally {
+    Microsoft.PowerShell.Management\Remove-Item -LiteralPath Function:\netsh.exe -Force -ErrorAction SilentlyContinue
+}
+
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("phone-camera-copy-contract-{0}" -f [guid]::NewGuid())
 $buildDir = Join-Path $tempRoot 'build'
 $destination = Join-Path $tempRoot 'destination'

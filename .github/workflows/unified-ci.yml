@@ -29,6 +29,7 @@ jobs:
           export PATH="$JAVA_HOME/bin:$PATH"
           ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug
       - name: Retain debug APK briefly for verification
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/unified-phone-camera'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: PHONE_CAMERA-android-debug
@@ -52,6 +53,7 @@ jobs:
           ctest --test-dir build/linux --output-on-failure
           (cd build/linux && cpack)
       - name: Retain Linux preview package briefly
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/unified-phone-camera'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: PHONE_CAMERA-linux-preview
@@ -90,6 +92,7 @@ jobs:
           & ./native/phone-camera/installer/build.ps1 -Version '1.5.1'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Retain installer briefly for verification
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/unified-phone-camera'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: PHONE_CAMERA-windows-setup

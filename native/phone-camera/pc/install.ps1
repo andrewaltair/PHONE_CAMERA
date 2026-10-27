@@ -31,6 +31,18 @@ function Configure-UserSession([string]$InstallDirectory, [string]$Executable, [
     Write-Host 'The first time, your phone asks to open PHONE_CAMERA: tick "Always" and tap OK.'
 }
 
+function Invoke-FirewallCommand([string[]]$Arguments, [bool]$Required) {
+    & netsh.exe @Arguments | Out-Null
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        $message = "PHONE_CAMERA firewall command failed (exit $exitCode): netsh $($Arguments -join ' ')"
+        if ($Required) { throw $message }
+        Write-Warning $message
+        return $false
+    }
+    return $true
+}
+
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $elevatedArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -BuildDir `"$BuildDir`""
@@ -118,8 +130,9 @@ if (-not $SkipUsbDk) {
     Write-Host 'Skipping the PHONE_CAMERA USB driver task.'
 }
 # The iPhone page (TCP 47900): allowed in on private networks only, as the installer does.
-& netsh.exe advfirewall firewall delete rule name="PHONE_CAMERA iPhone camera" | Out-Null
-& netsh.exe advfirewall firewall add rule name="PHONE_CAMERA iPhone camera" dir=in action=allow program="$dest\$exe" protocol=TCP localport=47900 profile=private enable=yes | Out-Null
+Invoke-FirewallCommand @('advfirewall', 'firewall', 'delete', 'rule', 'name=PHONE_CAMERA iPhone camera') $false
+Invoke-FirewallCommand @('advfirewall', 'firewall', 'add', 'rule', 'name=PHONE_CAMERA iPhone camera', 'dir=in',
+    'action=allow', "program=`"$dest\$exe`"", 'protocol=TCP', 'localport=47900', 'profile=private', 'enable=yes') $true
 
 # --- 3. Autostart + launch ------------------------------------------------------------------------
 if ($ElevatedChild) {

@@ -124,6 +124,9 @@ if(MYCAM_BUILD_TESTS)
     target_link_libraries(phone_camera_class_factory_test PRIVATE mfplat mf mfuuid strmiids ole32 oleaut32)
     add_test(NAME phone_camera_class_factory
              COMMAND phone_camera_class_factory_test $<TARGET_FILE:MyCamVCam> $<TARGET_FILE:MyCamVCamDShow>)
+    add_executable(phone_camera_instance_ipc_test tests/instance_ipc_test.cpp)
+    target_link_libraries(phone_camera_instance_ipc_test PRIVATE user32)
+    add_test(NAME phone_camera_instance_ipc COMMAND phone_camera_instance_ipc_test)
     add_executable(phone_camera_status_image_test tests/status_image_test.cpp companion/status_images.cpp companion/marquee.cpp
         vcam/frame_transform.cpp)
     target_link_libraries(phone_camera_status_image_test PRIVATE windowscodecs ole32 gdi32 user32)

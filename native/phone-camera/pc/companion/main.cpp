@@ -20,6 +20,7 @@
 #include "log.h"
 #include "pairing_dialog.h"
 #include "driver_task.h"
+#include "instance_ipc.h"
 #include "phone_link.h"
 #include "protocol.h"
 #include "settings_window.h"
@@ -278,6 +279,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_NEED_DRIVER:
         RunDriverBinder();
         return 0;
+    case kOpenSettingsMessage:
+        if (g_settings) g_settings->Show();
+        return 0;
     case WM_TIMER:
         if (wp == kDemoScanTimer) DemoScanDone();
         return 0;
@@ -450,10 +454,28 @@ void DemoScanDone() {
     PostMessageW(g_hwnd, WM_STATUS, 0, 0);
 }
 
-int QuitRunningInstance() {
+HWND FindCompanionWindow() {
     // Current versions use a hidden top-level window; versions before 1.1 used a message-only window.
     HWND other = FindWindowW(kCompanionWindowClass, nullptr);
     if (!other) other = FindWindowExW(HWND_MESSAGE, nullptr, kCompanionWindowClass, nullptr);
+    return other;
+}
+
+bool ForwardSettingsToExisting() {
+    // The mutex can exist briefly before the hidden window is registered. Retry only our exact class/message.
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        HWND other = FindCompanionWindow();
+        if (other && RequestSettingsWindow(other)) {
+            SetForegroundWindow(other);
+            return true;
+        }
+        Sleep(25);
+    }
+    return false;
+}
+
+int QuitRunningInstance() {
+    HWND other = FindCompanionWindow();
     if (!other) return 0;
     DWORD pid = 0;
     GetWindowThreadProcessId(other, &pid);
@@ -512,9 +534,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // Used by the installer/uninstaller: close the running companion cleanly (it turns the phone camera
     // off on the way out) and wait for it to exit. Exit code 0 = none running or it closed.
     if (wcsstr(GetCommandLineW(), L"--quit")) return QuitRunningInstance();
+    const bool settingsRequest = wcsstr(GetCommandLineW(), L"--settings") != nullptr;
+    if (settingsRequest && ForwardSettingsToExisting()) return 0;
 
     HANDLE single = CreateMutexW(nullptr, TRUE, kCompanionMutexName);
-    if (GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (settingsRequest && ForwardSettingsToExisting()) return 0;
+        return settingsRequest ? 1 : 0;
+    }
 
     LogInit();
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

@@ -71,32 +71,12 @@ Source: "..\pc\third_party\qrcodegen\LICENSE"; DestDir: "{app}\licenses"; DestNa
 Source: "..\app\src\main\assets\licenses\DejaVu-LICENSE.txt"; DestDir: "{app}\licenses"; DestName: "DejaVu-LICENSE.txt"; Flags: ignoreversion
 
 [Run]
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\MyCamVCam.dll"""; \
-    StatusMsg: "Registering the PHONE_CAMERA camera..."; Flags: runhidden waituntilterminated; Check: IsWindows11
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\MyCamVCamDShow.dll"""; \
-    StatusMsg: "Registering the PHONE_CAMERA camera..."; Flags: runhidden waituntilterminated; Check: not IsWindows11
-; Lets new phones get Windows' WinUSB driver later without a UAC prompt (a SYSTEM task users may only start).
-Filename: "{app}\PHONE_CAMERA.exe"; Parameters: "--register-task"; \
-    StatusMsg: "Setting up phone drivers..."; Flags: runhidden waituntilterminated; Tasks: usbdriver
-; The iPhone page (HTTPS on TCP 47900): allowed in on private networks only, so Windows never asks the user.
-; Deleted first, so an upgrade doesn't add a second copy.
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""PHONE_CAMERA iPhone camera"""; \
-    Flags: runhidden waituntilterminated
-Filename: "{sys}\netsh.exe"; \
-    Parameters: "advfirewall firewall add rule name=""PHONE_CAMERA iPhone camera"" dir=in action=allow program=""{app}\PHONE_CAMERA.exe"" protocol=TCP localport=47900 profile=private enable=yes"; \
-    StatusMsg: "Letting iPhones on your network reach PHONE_CAMERA..."; Flags: runhidden waituntilterminated
 Filename: "{app}\PHONE_CAMERA.exe"; Parameters: "--settings"; Description: "Open PHONE_CAMERA now and configure startup"; \
-    Flags: nowait postinstall skipifsilent runasoriginaluser
+    Flags: nowait postinstall skipifsilent runasoriginaluser; Check: InstallSucceeded
 
 [UninstallRun]
 Filename: "{app}\PHONE_CAMERA.exe"; Parameters: "--quit"; RunOnceId: "QuitPHONE_CAMERA"; Flags: runhidden waituntilterminated
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s /u ""{app}\MyCamVCam.dll"""; RunOnceId: "UnregisterPHONE_CAMERA"; Flags: runhidden waituntilterminated
-; Unregister both regardless of which one is actually registered (DllUnregisterServer on the inactive
-; DLL is a harmless no-op): simpler than tracking which backend an install picked, and correct across an
-; in-place Windows 10 -> 11 upgrade that never re-ran this installer.
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s /u ""{app}\MyCamVCamDShow.dll"""; RunOnceId: "UnregisterPHONE_CAMERA_DShow"; Flags: runhidden waituntilterminated
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""PHONE_CAMERA phone driver"" /F"; RunOnceId: "DeleteDriverTask"; Flags: runhidden waituntilterminated
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""PHONE_CAMERA iPhone camera"""; RunOnceId: "DeleteFirewallRule"; Flags: runhidden waituntilterminated
 ; Do not stop Frame Server or other camera hosts. If a DLL is still loaded, Windows will report that the
 ; user must close the camera app and retry/restart the PC.
 
@@ -104,6 +84,22 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 Type: dirifempty; Name: "{app}"
 
 [Code]
+var
+  InstallationFailed: Boolean;
+  UsbDkNeedsRestart: Boolean;
+
+function InstallSucceeded: Boolean;
+begin
+  Result := not InstallationFailed;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  if InstallationFailed then Result := 1
+  else if UsbDkNeedsRestart then Result := 3010
+  else Result := 0;
+end;
+
 function UsbDkInstalled: Boolean;
 begin
   Result := FileExists(ExpandConstant('{sys}\UsbDkHelper.dll'));
@@ -120,40 +116,133 @@ begin
   Result := Version.Build >= 22000;
 end;
 
+function ExecChecked(const FileName, Params, What: String; ShowError: Boolean): Boolean;
+var
+  Code: Integer;
+begin
+  Code := -1;
+  Result := Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+  if not Result then begin
+    Log(What + ' (exit ' + IntToStr(Code) + ').');
+    if ShowError and not WizardSilent then
+      MsgBox(What + ' (exit ' + IntToStr(Code) + ').', mbError, MB_OK);
+  end;
+end;
+
+function RegisterCameraBackend: Boolean;
+var
+  DllName, DllPath: String;
+begin
+  if IsWindows11 then DllName := 'MyCamVCam.dll' else DllName := 'MyCamVCamDShow.dll';
+  DllPath := ExpandConstant('{app}\' + DllName);
+  Result := ExecChecked(ExpandConstant('{sys}\regsvr32.exe'), '/s "' + DllPath + '"',
+                        'Could not register the PHONE_CAMERA camera backend ' + DllName, True);
+end;
+
+function ConfigureFirewall: Boolean;
+var
+  RuleName, AddParams: String;
+begin
+  RuleName := 'PHONE_CAMERA iPhone camera';
+  // Delete is best-effort: the rule may not exist on a first install. Add is blocking and checked.
+  ExecChecked(ExpandConstant('{sys}\netsh.exe'), 'advfirewall firewall delete rule name="' + RuleName + '"', '', False);
+  AddParams := 'advfirewall firewall add rule name="' + RuleName + '" dir=in action=allow ' +
+               'program="' + ExpandConstant('{app}\PHONE_CAMERA.exe') + '" protocol=TCP localport=47900 ' +
+               'profile=private enable=yes';
+  Result := ExecChecked(ExpandConstant('{sys}\netsh.exe'), AddParams,
+                        'Could not configure the PHONE_CAMERA private-network firewall rule', True);
+end;
+
+function RegisterDriverTask: Boolean;
+begin
+  Result := ExecChecked(ExpandConstant('{app}\PHONE_CAMERA.exe'), '--register-task',
+                        'Could not register the PHONE_CAMERA USB driver task', True);
+end;
+
+procedure UnregisterCameraBackend(const DllName: String);
+var
+  DllPath: String;
+begin
+  DllPath := ExpandConstant('{app}\' + DllName);
+  if FileExists(DllPath) then
+    ExecChecked(ExpandConstant('{sys}\regsvr32.exe'), '/s /u "' + DllPath + '"',
+                'Could not unregister the PHONE_CAMERA camera backend ' + DllName, True);
+end;
+
+procedure UnregisterCameraBackends;
+begin
+  UnregisterCameraBackend('MyCamVCam.dll');
+  UnregisterCameraBackend('MyCamVCamDShow.dll');
+end;
+
 // Installs the UsbDk driver if it's missing. A plain [Run] entry can't check msiexec's exit code, so a
 // silent failure here (seen after uninstalling an older PHONE_CAMERA without a restart in between — the prior
 // driver removal can still be settling) used to leave USB broken with no explanation. One retry after a
 // short pause covers that race; if it still fails, the user gets a clear next step instead of silence.
-procedure InstallUsbDk;
+function InstallUsbDk: Boolean;
 var
   ResultCode, Attempt: Integer;
   Params: String;
 begin
+  Result := True;
   if UsbDkInstalled then exit;
   Params := '/i "' + ExpandConstant('{app}\redist\{#UsbDkMsi}') + '" /qn /norestart';
   ResultCode := -1;
   for Attempt := 1 to 2 do begin
     if not Exec(ExpandConstant('{sys}\msiexec.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
       ResultCode := -1;
-    if (ResultCode = 0) or UsbDkInstalled then begin
+    if ResultCode = 3010 then begin
+      break; // Preserve reboot-required status even if UsbDkHelper.dll appeared already.
+    end;
+    if ResultCode = 0 then begin
       ResultCode := 0;
       break;
     end;
     if Attempt = 1 then Sleep(3000); // Give a just-prior uninstall's driver cleanup a moment to settle.
   end;
-  if WizardSilent then exit; // Don't pop dialogs during an unattended install.
   if ResultCode = 3010 then
-    MsgBox('PHONE_CAMERA needs to finish setting up the USB driver. Please restart your PC before connecting a phone over USB.' + #13#10#13#10 +
-           'Wi-Fi and iPhone (Safari) don''t need a restart.', mbInformation, MB_OK)
-  else if ResultCode <> 0 then
-    MsgBox('Setting up the USB driver didn''t finish (error ' + IntToStr(ResultCode) + '). Phones over USB won''t ' +
-           'work until this is fixed — try restarting your PC and running this installer again.' + #13#10#13#10 +
-           'Wi-Fi and iPhone (Safari) don''t need the USB driver.', mbError, MB_OK);
+    begin
+      UsbDkNeedsRestart := True;
+      if not WizardSilent then
+        MsgBox('PHONE_CAMERA needs to finish setting up the USB driver. Please restart your PC before connecting a phone over USB.' + #13#10#13#10 +
+               'Wi-Fi and iPhone (Safari) don''t need a restart.', mbInformation, MB_OK);
+    end
+  else if ResultCode <> 0 then begin
+    Result := False;
+    if not WizardSilent then
+      MsgBox('Setting up the USB driver didn''t finish (error ' + IntToStr(ResultCode) + '). Phones over USB won''t ' +
+             'work until this is fixed — try restarting your PC and running this installer again.' + #13#10#13#10 +
+             'Wi-Fi and iPhone (Safari) don''t need the USB driver.', mbError, MB_OK);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep = ssPostInstall) and WizardIsTaskSelected('usbdriver') then InstallUsbDk;
+  if CurStep = ssPostInstall then begin
+    if WizardIsTaskSelected('usbdriver') and not InstallUsbDk then
+      InstallationFailed := True
+    else if WizardIsTaskSelected('usbdriver') and not RegisterDriverTask then
+      InstallationFailed := True
+    else if not RegisterCameraBackend then
+      InstallationFailed := True
+    else if not ConfigureFirewall then
+      InstallationFailed := True;
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpFinished then begin
+    if InstallationFailed then begin
+      WizardForm.FinishedHeadingLabel.Caption := 'PHONE_CAMERA setup failed';
+      WizardForm.FinishedLabel.Caption :=
+        'The camera backend, private-network firewall rule, or USB driver task could not be configured.' + #13#10#13#10 +
+        'Close any camera application and run the installer again. No post-install PHONE_CAMERA launch was performed.';
+    end else if UsbDkNeedsRestart then begin
+      WizardForm.FinishedLabel.Caption :=
+        'PHONE_CAMERA is installed. Restart Windows manually when convenient to finish the Android USB driver setup.';
+    end;
+  end;
 end;
 
 procedure RunHidden(const FileName, Params: String);
@@ -179,8 +268,14 @@ end;
 // when the user says so.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if (CurUninstallStep = usUninstall) and UsbDkInstalled and not UninstallSilent then
-    if MsgBox('Also remove the UsbDk USB driver?' + #13#10#13#10 +
-              'Choose No if other software on this PC uses UsbDk.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
-      RunHidden(ExpandConstant('{sys}\msiexec.exe'), '/x "' + ExpandConstant('{app}\redist\{#UsbDkMsi}') + '" /qn /norestart');
+  if CurUninstallStep = usUninstall then begin
+    UnregisterCameraBackends;
+    ExecChecked(ExpandConstant('{sys}\netsh.exe'),
+                'advfirewall firewall delete rule name="PHONE_CAMERA iPhone camera"',
+                'Could not remove the PHONE_CAMERA private-network firewall rule', True);
+    if UsbDkInstalled and not UninstallSilent then
+      if MsgBox('Also remove the UsbDk USB driver?' + #13#10#13#10 +
+                'Choose No if other software on this PC uses UsbDk.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+        RunHidden(ExpandConstant('{sys}\msiexec.exe'), '/x "' + ExpandConstant('{app}\redist\{#UsbDkMsi}') + '" /qn /norestart');
+  end;
 end;
