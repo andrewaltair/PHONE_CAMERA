@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PHONE_CAMERA">
+<meta name="theme-color" content="#0A5DEB">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
+<link rel="stylesheet" href="/style.css">
+<title>PHONE_CAMERA</title>
+</head>
+<body>
+<header class="titlebar">
+  <img class="logo" src="/icon.png" alt="" width="36" height="36">
+  <span class="title">PHONE_CAMERA</span>
+</header>
+
+<main>
+  <!-- The "Now" group: what is happening and the one thing to do next. -->
+  <section class="group hero" id="hero" aria-live="polite">
+    <h1 class="group-title" id="headline">PHONE_CAMERA</h1>
+    <div class="group-body">
+      <p class="sentence" id="sentence">Loading…</p>
+      <div class="progress" id="progress" hidden><div class="chunks"></div></div>
+      <p class="facts" id="facts" hidden></p>
+      <button class="button hero-button go" id="start" hidden>
+        <span class="badge play" aria-hidden="true"></span>
+        <span class="label"><b>Start</b><small>Allow the camera when Safari asks.</small></span>
+      </button>
+      <button class="button hero-button" id="pause" hidden>
+        <span class="badge pause" aria-hidden="true"></span>
+        <span class="label"><b id="pauseTitle">Pause the camera</b><small id="pauseHint">Apps see “Camera paused” until you resume, here or on the PC.</small></span>
+      </button>
+    </div>
+  </section>
+
+  <section class="group" id="cameraGroup" hidden>
+    <h2 class="group-title">Camera</h2>
+    <div class="group-body">
+      <div class="radios" role="radiogroup" aria-label="Camera">
+        <label class="radio"><input type="radio" name="facing" value="0" checked><span class="dot" aria-hidden="true"></span>Back camera</label>
+        <label class="radio"><input type="radio" name="facing" value="1"><span class="dot" aria-hidden="true"></span>Front camera</label>
+      </div>
+      <p class="note">Resolution, frame rate, zoom and torch are chosen on the PC.</p>
+    </div>
+  </section>
+
+  <section class="group" id="tipsGroup" hidden>
+    <h2 class="group-title">Keep it running</h2>
+    <div class="group-body">
+      <ul class="tips">
+        <li>Keep this page open. If the iPhone locks or you switch apps, the camera pauses, and it comes back when you return.</li>
+        <li>Tip: Share → Add to Home Screen, to open PHONE_CAMERA again without the QR code.</li>
+      </ul>
+      <button class="button" id="dim">Dim the screen</button>
+    </div>
+  </section>
+
+<section class="group" id="aboutGroup">
+  <h2 class="group-title">About PHONE_CAMERA</h2>
+  <div class="group-body">
+    <p class="note">PHONE_CAMERA sends camera video only. It does not capture audio or provide a microphone.</p>
+    <p class="note">Based on MyCam, an MIT-licensed project by whoissaaif.</p>
+    <p class="note"><a href="https://github.com/andrewaltair/PHONE_CAMERA" target="_blank" rel="noopener">PHONE_CAMERA on GitHub</a> · <a href="https://github.com/whoissaaif/mycam" target="_blank" rel="noopener">Original MyCam source (MIT)</a></p>
+  </div>
+</section>
+</main>
+
+<!-- The camera's picture is only read from here; it is never shown (no preview, as on Android). -->
+<video id="video" playsinline muted autoplay></video>
+
+<div class="dim" id="dimScreen" hidden>
+  <p>PHONE_CAMERA is still on.<br>Tap to brighten.</p>
+</div>
+
+<script src="/protocol.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
