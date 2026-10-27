@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PHONE_CAMERA
+Comment=Use your phone as a webcam
+Exec=phone-camera-tray
+Icon=phone-camera
+Categories=AudioVideo;Video;
+Keywords=webcam;camera;phone;iphone;android;

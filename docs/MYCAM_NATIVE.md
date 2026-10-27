@@ -1,170 +1,92 @@
-# MyCam native upstream companion
+# PHONE_CAMERA native architecture and attribution
 
-This directory documents the source-only upstream snapshot imported at
-`native/mycam/`. It is an optional native companion reference, kept separate
-from PHONE_CAMERA's existing WebRTC mode. The import does not replace, alter,
-enable, install, or automatically select the WebRTC path, and it does not
-claim that this repository can build or run MyCam as integrated product code.
+The main PHONE_CAMERA application is a branded, modified integration of the
+[MyCam](https://github.com/whoissaaif/mycam) source by whoissaaif, originally
+imported from commit `a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a`. It is no
+longer an untouched upstream snapshot.
 
-## Provenance and scope
+## Video path
 
-- Upstream project: [whoissaaif/mycam](https://github.com/whoissaaif/mycam)
-- Official upstream releases: [whoissaaif/mycam releases](https://github.com/whoissaaif/mycam/releases)
-- Upstream commit: [`a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a`](https://github.com/whoissaaif/mycam/commit/a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a)
-- Import method: `git archive` of that commit, extracted below `native/mycam/`.
-- Snapshot inventory: 329 tracked upstream files; no upstream `.git` directory,
-  untracked files, working-tree data, credentials, signing keys, or build
-  outputs were imported. The tracked file-content total at the source commit
-  is 36,767,630 bytes (about 35.1 MiB, excluding archive metadata).
+Android USB, encrypted Android Wi-Fi and the paired iPhone Safari/WebCodecs
+page feed the same native Windows companion. Its H.264 decoder publishes NV12
+frames to a shared-memory channel consumed by the Windows virtual camera:
 
-The upstream source keeps its own project name (`MyCam`), package layout,
-build files, notices, and licenses. This subtree is not a binary distribution
-and no APK, EXE, installer, driver, or generated release artifact is included.
+- Windows 11: Media Foundation virtual camera.
+- Windows 10 1809+: DirectShow source filter.
 
-The imported source contains:
+The camera appears as `PHONE_CAMERA`. OBS is not part of this path. The
+application ID, virtual-camera CLSIDs, Windows storage, process and installer
+identities are distinct from the original MyCam installation; the phone wire
+protocol and accessory identity remain compatible.
 
-- `app/`: Android Kotlin/Compose application. It captures the phone camera and
-  sends MyCam protocol packets over Android Open Accessory USB or paired Wi-Fi.
-- `pc/`: C++ PC companion and virtual-camera implementations. Windows 11 uses
-  the Media Foundation Frame Server virtual-camera API; Windows 10 (build
-  17763+) uses the DirectShow fallback. The same source also has a Linux
-  preview daemon/tray path using v4l2loopback.
-- `pc/companion/web/`: the iPhone/iPad Safari page embedded by the PC/Linux
-  companion. iPhone uses WebCodecs H.264 over the local network; there is no
-  separate iPhone app in this upstream snapshot.
-- `protocol/`, `docs/`, `pc/tests/`, and Android tests: shared protocol,
-  architecture notes, golden vectors, and test sources.
+The native route is video-only. It does not supply a virtual microphone. The
+old PHONE_CAMERA WebRTC browser stream is kept as a separate legacy mode for
+its prior audio capability; the two transports do not share a phone session.
 
-## Platform differences and known limitations
+## Build and install
 
-- **Android:** requires Android Open Accessory support (the upstream app has
-  `minSdk = 24`). USB accessory mode can take over a connected phone while the
-  companion is running; Wi-Fi requires one-time pairing. Android support is
-  implemented in the source, but is not wired into PHONE_CAMERA here.
-- **Windows:** Windows 11 uses `MFCreateVirtualCamera`; Windows 10 uses a
-  DirectShow source filter. The companion and virtual-camera pieces are native
-  Windows code and require the Windows SDK/toolchain. The upstream installer
-  is not run or included by this import.
-- **Linux:** marked **preview** by upstream. It uses a distro-provided
-  v4l2loopback device and dynamically linked FFmpeg/libusb/OpenSSL. Upstream
-  documents iPhone-over-Wi-Fi testing on Ubuntu 24.04; Android USB/Wi-Fi is
-  built but was not tested on Linux in that snapshot. The tray is optional and
-  there is no settings window in the preview.
-- **iPhone/iPad:** requires a current browser with WebCodecs H.264 (upstream
-  documents Safari), both devices on the same network, and the page in the
-  foreground. Safari may stop the camera when backgrounded or the device is
-  locked. Wired iPhone support is a plan, not a shipped feature.
-- **General:** the upstream architecture supports one phone at a time; USB
-  takes priority over Wi-Fi/iPhone. Pairing uses a self-signed certificate for
-  the companion's local HTTPS page. These are upstream behavior/limitations,
-  not claims about PHONE_CAMERA integration.
+From the repository root:
 
-## Upstream build and test commands
+```powershell
+# Build and run native tests without system changes.
+powershell -ExecutionPolicy Bypass -File setup.ps1 -BuildOnly
 
-Run these from the imported upstream root (`native/mycam/`) with the required
-toolchain and dependency files available. They are recorded as upstream
-commands; they do not modify or activate PHONE_CAMERA's WebRTC mode.
+# Build and install the Windows camera and Android USB support.
+powershell -ExecutionPolicy Bypass -File setup.ps1
 
-### Android
-
-Requirements: Android Studio or a compatible JDK/Android Gradle environment,
-the Android SDK required by the Gradle configuration (compile SDK 37), and the
-SDK/platform dependencies resolved by Gradle.
-
-```text
-gradlew.bat assembleDebug
-gradlew.bat testDebugUnitTest
+# For iPhone or Wi-Fi only, omit the Android USB driver.
+powershell -ExecutionPolicy Bypass -File setup.ps1 -SkipUsbDk
 ```
 
-The upstream release signing configuration is optional for debug builds. A
-release keystore is external and is intentionally not part of this import.
+Installation requires administrator rights. It registers this product's COM
+camera server, adds its private-network iPhone firewall rule and may install
+UsbDk and its own phone-driver task. Windows startup is optional via
+`-StartWithWindows` or the application's settings. It does not stop Windows Frame Server or
+terminate a separate MyCam application.
 
-### Windows PC companion
+Android builds require JDK 17, Android SDK platform 37 and Gradle dependencies:
 
-Requirements: Visual Studio 2022 Build Tools, Windows 11 SDK, CMake, and the
-Windows libraries selected by the upstream CMake files.
-
-```text
-cmake -S pc -B pc/build -A x64
-cmake --build pc/build --config Release
-ctest --test-dir pc/build -C Release
+```powershell
+cd native/phone-camera
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
 ```
 
-Add `-DMYCAM_BUILD_TOOLS=ON` at configure time for upstream developer tools.
-The upstream installer command requires Inno Setup 6 and is not an import or
-installation step:
+The Android application ID is `ge.andrewaltair.phonecamera`, so Android
+treats it as a new application rather than an update of MyCam. The Gradle
+debug APK is not a production-signed release.
 
-```text
-powershell -ExecutionPolicy Bypass -File installer\build.ps1 -Version X.Y.Z
-```
+A graphical Windows setup can be built with Inno Setup 6 using
+`native/phone-camera/installer/build.ps1`. This compiles the application,
+verifies the downloaded UsbDk package hash and builds an installer; building
+does not run the installer. Android USB is an optional installer task.
 
-### Linux preview
+The Linux daemon and v4l2loopback support remain preview code. The package does
+not change global v4l2loopback options; a suitable PHONE_CAMERA-labelled output
+device must be configured separately. See the
+[Linux setup notes](../native/phone-camera/pc/linux/README.md). The Windows
+setup does not install or validate that Linux path.
 
-The upstream Ubuntu 24.04 example installs build tools and development
-packages, then configures the Linux CMake split:
+## Verification boundaries
 
-```text
-sudo apt install build-essential cmake pkg-config libusb-1.0-0-dev libssl-dev libavcodec-dev libavutil-dev libswscale-dev
-cmake -S pc -B pc/build-linux -DCMAKE_BUILD_TYPE=Release
-cmake --build pc/build-linux -j
-cd pc/build-linux && cpack
-ctest --test-dir pc/build-linux
-```
+Windows compile, CTest and process-local COM class-factory tests can run
+without camera registration or a driver. They cannot establish that a phone,
+a Windows camera consumer, USB, Wi-Fi, iPhone certificate trust, or actual
+frame delivery works. Android build results are separate from installation and
+real-device testing. Actual latency, FPS and image quality require measurements
+on the target phone, PC and network.
 
-Linux also needs a suitable v4l2loopback installation for an actual camera
-device; the upstream package recommends `v4l2loopback-dkms`. FFmpeg is linked
-dynamically from the distribution rather than vendored. GTK 3 and Ayatana
-AppIndicator are optional for the tray target; without them the daemon still
-builds without `mycam-tray`.
+## Licenses
 
-### iPhone page and protocol checks
+- [PHONE_CAMERA MIT license](../LICENSE).
+- [MyCam MIT license and original copyright](../native/phone-camera/LICENSE).
+- [libusb LGPL-2.1](../native/phone-camera/pc/third_party/libusb/COPYING).
+- [qrcodegen MIT license](../native/phone-camera/pc/third_party/qrcodegen/LICENSE).
+- [DejaVu font notices](../native/phone-camera/app/src/main/assets/licenses/DejaVu-LICENSE.txt).
+- UsbDk is distributed separately under its
+  [Apache-2.0 license](https://github.com/daynix/UsbDk/blob/v1.00-22/LICENSE).
 
-There is no separate iPhone build: `pc/companion/web/` is embedded into the
-companion executable. Rebuild the companion after changing those files. The
-`web_golden` test needs Node.js and is skipped by CTest when Node.js is absent.
-The upstream developer-only `web_probe`, `fake_page.js`, and
-`browser_check.js` checks require the tools build and (for the browser check) a
-headless Chrome environment.
-
-## Licensing and attribution
-
-The upstream MyCam application and companion source are provided under the
-MIT License in [`native/mycam/LICENSE`](../native/mycam/LICENSE). Keep that
-notice with copies or substantial portions of the upstream source. This
-upstream snapshot has its own name and licensing terms; importing it does not
-relicense PHONE_CAMERA or imply that PHONE_CAMERA distributes a MyCam binary.
-
-The imported tree retains the third-party notices required by upstream,
-including:
-
-- [`pc/third_party/libusb/COPYING`](../native/mycam/pc/third_party/libusb/COPYING):
-  LGPL-2.1 for the vendored Windows libusb subset.
-- [`pc/third_party/qrcodegen/LICENSE`](../native/mycam/pc/third_party/qrcodegen/LICENSE):
-  Project Nayuki MIT license and attribution.
-- [`app/src/main/assets/licenses/DejaVu-LICENSE.txt`](../native/mycam/app/src/main/assets/licenses/DejaVu-LICENSE.txt):
-  DejaVu/Bitstream Vera/Arev font notices.
-
-The upstream README also identifies FFmpeg as a distribution-provided
-LGPL/GPL dependency on Linux and UsbDk as an Apache-2.0 dependency downloaded
-by the upstream Windows installer. Neither dependency is silently converted
-to a PHONE_CAMERA dependency by this source import; check the applicable
-upstream and dependency licenses before redistribution.
-
-## Verification record for this import
-
-The source was read from the clean upstream checkout at the exact commit above
-and extracted with `git archive`; the original upstream project was not edited.
-Verification should compare the imported path against that commit with:
-
-```text
-git -C ..\mycam-reference archive --format=tar a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a
-git -C ..\mycam-reference ls-tree -r --name-only a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a
-```
-
-On 27 October 2026, the imported Windows PC source was configured with Visual
-Studio 2022 Build Tools and built in Release mode. The companion and both
-virtual-camera DLLs compiled; the two CTest entries (`mycam_tests` and
-`web_golden`) passed. These are build and protocol/unit checks, not a device
-test. The driver and application were not installed or registered. Android,
-Linux, a real phone-to-PC connection, and integration with the existing WebRTC
-mode were not tested by this import.
+The Windows companion links the vendored libusb as a separate
+`PHONE_CAMERA_libusb.dll`. Binary redistribution still needs the applicable
+LGPL notices and source availability; retaining license text alone is not a
+complete redistribution plan. Linux uses distribution-provided FFmpeg and
+other libraries with their own applicable licenses.

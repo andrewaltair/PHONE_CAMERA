@@ -1,12 +1,14 @@
 {
   "name": "phone-camera",
   "version": "1.0.0",
-  "description": "Turn your iPhone into a low-latency wireless webcam for your PC over WebRTC — no app, no Mac, built from scratch.",
+  "description": "Turn an Android phone or iPhone into a Windows webcam using PHONE_CAMERA's native virtual camera.",
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test tests/webrtc-behavior.test.js"
+    "start": "node scripts/launch-native.cjs",
+    "legacy": "node server.js",
+    "test": "node --test tests/webrtc-behavior.test.js tests/native-launcher.test.js",
+    "test:phone": "node native/phone-camera/pc/tools/webtest/identity_check.js && node native/phone-camera/pc/tools/webtest/golden_check.js native/phone-camera/protocol/golden.txt"
   },
   "keywords": [
     "webrtc",

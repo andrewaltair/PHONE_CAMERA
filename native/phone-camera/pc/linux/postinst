@@ -1,0 +1,22 @@
+#!/bin/sh
+# PHONE_CAMERA .deb: install files without starting services or touching shared devices.
+set -e
+if [ "$1" = "configure" ]; then
+    # USB access for the logged-in user (69-phone-camera.rules). Reload rules
+    # only; do not re-trigger every USB device on the host.
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        echo "PHONE_CAMERA: reconnect the intended phone to apply the USB rule." >&2
+    fi
+    # v4l2loopback is system-wide and may be shared with OBS or another
+    # virtual-camera product. PHONE_CAMERA neither loads it nor installs a
+    # modprobe/modules-load drop-in. The owner must provide a node labelled
+    # PHONE_CAMERA, or explicitly assign an owner-approved node with --device.
+    echo "PHONE_CAMERA does not change global v4l2loopback settings. Provide a PHONE_CAMERA-labelled node or use --device /dev/videoN with owner approval." >&2
+    echo "PHONE_CAMERA is installed but is not enabled or started automatically." >&2
+    echo "After providing an approved camera, start it explicitly: systemctl --user start phone-camera" >&2
+    echo "Optional per-user enable: systemctl --user enable phone-camera" >&2
+    echo "Optional tray: phone-camera-tray" >&2
+    echo "To connect an iPhone: phone-camera-companion --pair" >&2
+fi
+exit 0

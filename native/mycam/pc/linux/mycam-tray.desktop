@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=MyCam
-Comment=Use your phone as a webcam
-Exec=mycam-tray
-Icon=mycam
-Categories=AudioVideo;Video;
-Keywords=webcam;camera;phone;iphone;android;
-X-GNOME-Autostart-enabled=true

@@ -1,27 +1,24 @@
-# PHONE_CAMERA and MyCam: what is different
+# What changed from the original PHONE_CAMERA
 
-This comparison uses PHONE_CAMERA's original WebRTC mode and the MyCam source
-snapshot from [upstream commit `a0499ea`](https://github.com/whoissaaif/mycam/tree/a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a).
-The upstream snapshot is included under [`native/mycam`](../native/mycam) as a
-separate application; it is not a feature toggle inside the WebRTC app.
+PHONE_CAMERA now uses a single native video path derived from
+[MyCam](https://github.com/whoissaaif/mycam). The Android application and
+iPhone browser page send video to the same Windows companion, which publishes
+it directly as the `PHONE_CAMERA` system camera.
 
-| Capability | PHONE_CAMERA WebRTC mode | Imported MyCam source |
+| Capability | Original browser mode | Unified native video mode |
 | --- | --- | --- |
-| Phone capture | Safari camera and microphone via WebRTC | Android application; separate Safari/WebCodecs path for iPhone |
-| USB | iPhone Personal Hotspot provides an IP link | Android Open Accessory USB; iPhone cable support is not implemented upstream |
-| PC camera device | OBS Browser Source plus OBS Virtual Camera | Native Windows virtual-camera implementations; Linux preview uses v4l2loopback |
-| Quality and frame rate | Requests 480p–1080p and 30/60 fps; actual settings depend on the browser and phone | Source supports up to 4K and 120 fps where the particular phone and encoder support them |
-| Rate adaptation | WebRTC congestion control and a manual bitrate ceiling | Upstream includes bitrate/backpressure handling for its own transport |
-| Device pairing | No join PIN; use a trusted LAN | Pairing and device authorization in the native application |
-| Privacy controls | Start and Stop release the browser camera and microphone | Upstream has its own pause and device-consent flows |
-| Camera controls | Browser-exposed lens, quality request, zoom and torch | Device-reported controls and mode combinations, with platform-dependent availability |
-| Simultaneous viewers | One receiving slot; PC viewer and OBS replace one another | Upstream supports one phone connection at a time |
+| Windows camera | OBS Browser Source and OBS Virtual Camera | Media Foundation on Windows 11; DirectShow on Windows 10 1809+ |
+| Android | No dedicated PHONE_CAMERA Android app | Android companion with USB accessory and paired Wi-Fi paths |
+| iPhone | Safari/WebRTC over local Wi-Fi or USB Personal Hotspot | Safari/WebCodecs with device pairing over a local IP link |
+| Video settings | Browser requests, depending on capabilities | Device-reported camera settings and supported modes, including high-resolution/high-frame-rate options where available |
+| Connection protection | Legacy signaling has no PIN | Existing MyCam-derived pairing and device authorization |
+| Microphone | Browser stream can include the phone microphone | Video only; no Windows virtual microphone |
+| Linux | Manual browser/Node setup | Inherited v4l2loopback daemon is preview code |
 
-The WebRTC mode also reports capture settings and received resolution/FPS
-where supported, and reconnects signaling within a bounded retry window. Its
-HUD is not an end-to-end latency measurement. A source comparison or a
-synthetic test does not establish which path is faster or sharper on a real
-phone, PC, network, or video-call application.
+These are source-level capabilities, not a measured performance comparison.
+The native camera components can be compiled and activated in a local test
+without registration. A real phone, system registration, driver, calling app,
+latency, image quality and long-running connection must be tested separately.
 
-See [native build, provenance and license notes](MYCAM_NATIVE.md) and the
-[upstream architecture](../native/mycam/docs/ARCHITECTURE.md).
+The legacy browser code remains available and is not used by the primary
+no-OBS native video path. See [architecture and setup](MYCAM_NATIVE.md).

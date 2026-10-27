@@ -1,0 +1,18 @@
+# The PHONE_CAMERA companion for the logged-in user (a systemd user unit: the camera belongs to a desktop session).
+# Installed but not enabled by the package; per user: systemctl --user enable --now phone-camera
+[Unit]
+Description=PHONE_CAMERA: phone as a webcam
+After=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+ExecStart=/usr/bin/phone-camera-companion --daemon
+Environment=XDG_CONFIG_HOME=%h/.config/PHONE_CAMERA
+Environment=PHONE_CAMERA_CONFIG_HOME=%h/.config/PHONE_CAMERA
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target
