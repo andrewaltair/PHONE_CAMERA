@@ -9,6 +9,7 @@ claim that this repository can build or run MyCam as integrated product code.
 ## Provenance and scope
 
 - Upstream project: [whoissaaif/mycam](https://github.com/whoissaaif/mycam)
+- Official upstream releases: [whoissaaif/mycam releases](https://github.com/whoissaaif/mycam/releases)
 - Upstream commit: [`a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a`](https://github.com/whoissaaif/mycam/commit/a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a)
 - Import method: `git archive` of that commit, extracted below `native/mycam/`.
 - Snapshot inventory: 329 tracked upstream files; no upstream `.git` directory,

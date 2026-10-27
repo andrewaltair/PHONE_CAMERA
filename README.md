@@ -26,7 +26,7 @@ Xcode, no cloud — the phone just uses Safari, and every line of the server is 
 | 📷 **Live camera + mic** | iPhone Safari → PC browser, peer‑to‑peer WebRTC. Zero install on the phone. |
 | ⚡ **Latency controls** | H.264 is preferred where available, with a tunable jitter buffer and a live **latency HUD** (RTT · buffer · fps · loss). Actual end-to-end latency varies by device and network. |
 | 🔌 **Use it as a system camera** | Pipe into **OBS Virtual Camera** → selectable in Zoom, Meet, Discord, Teams, the browser. |
-| 🎛️ **Control the phone from the PC** | Quality (480p–1080p / 30–60 fps), bitrate, lens switch, zoom & torch — *capability‑gated* so you only see what your device supports. |
+| 🎛️ **Control the phone from the PC** | Request quality and bitrate; use lens, zoom and torch controls where the browser exposes them. The phone reports its actual capture settings. |
 | 📶 **Wi‑Fi or USB** | Same Wi‑Fi, **or** a USB cable using the iPhone Personal Hotspot IP link. |
 | 🔒 **Trusted local HTTPS** | One‑time `mkcert` CA → no browser warnings; everything stays on your LAN. |
 | 📲 **Scan‑to‑connect** | The server prints a **QR code** of the phone URL — point the iPhone camera at it, done. |
@@ -165,7 +165,7 @@ The WebRTC mode includes controls that can help tune latency:
 
 - **Receiver jitter buffer** → `jitterBufferTarget = 0`, with live **0 / 30 / 80 ms** buttons (bump up if it stutters).
 - **Latency HUD** → `RTT · jbuf · fps · loss` from `getStats()`, so you tune by numbers.
-- **Sender** → hardware **H.264**, `maintain-framerate`, `contentHint = 'motion'`.
+- **Sender** → prefers **H.264** when available, requests a bitrate ceiling, and hints that the content is motion. Browser and device support vary.
 - **Physical** → try a nearby **5 GHz** Wi-Fi connection, PC Ethernet, or the iPhone's USB hotspot link; compare the results on your devices.
 
 The HUD reports network and receiver statistics; it does not measure sensor-to-screen delay. Measure on the
