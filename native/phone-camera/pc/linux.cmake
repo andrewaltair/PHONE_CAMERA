@@ -101,6 +101,9 @@ if(MYCAM_BUILD_TESTS)
         companion/marquee.cpp)
     target_compile_options(phone_camera_linux_status_image_test PRIVATE -Wall -Wextra)
     add_test(NAME phone_camera_linux_status_image COMMAND phone_camera_linux_status_image_test)
+    add_test(NAME phone_camera_linux_packaging_contract
+             COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/linux_packaging_contract.cmake)
     # The OpenSSL TLS server against an OpenSSL client, in memory.
     add_executable(phone_camera_tls_tests tests/tls_test.cpp companion/tls_server_openssl.cpp companion/log_posix.cpp)
     target_link_libraries(phone_camera_tls_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto)
@@ -118,6 +121,19 @@ endif()
 # One version for Android and PC (CLAUDE.md): read it from the app, not a fourth copy.
 file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/../app/build.gradle.kts MYCAM_VERSION_LINE REGEX "versionName = \"[0-9.]+\"")
 string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" MYCAM_VERSION "${MYCAM_VERSION_LINE}")
+
+# The DEB must carry every notice for code/assets it redistributes. Check the
+# source paths while configuring so a moved notice cannot silently disappear
+# from data.tar.
+set(PHONE_CAMERA_NOTICE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../LICENSE)
+set(MYCAM_NOTICE ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE)
+set(QRCODEGEN_NOTICE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/qrcodegen/LICENSE)
+set(DEJAVU_NOTICE ${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/assets/licenses/DejaVu-LICENSE.txt)
+foreach(notice ${PHONE_CAMERA_NOTICE_DIR} ${MYCAM_NOTICE} ${QRCODEGEN_NOTICE} ${DEJAVU_NOTICE})
+    if(NOT EXISTS ${notice})
+        message(FATAL_ERROR "PHONE_CAMERA Linux package notice is missing: ${notice}")
+    endif()
+endforeach()
 
 # USB access for the logged-in user, before the switch to accessory mode (the phone maker's vendor id, from
 # kAndroidVendors[] in phone_link.cpp, the list the companion asks) and after it (Google, 18d1:2d00-2d05).
@@ -142,6 +158,10 @@ set(CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXE
     WORLD_READ WORLD_EXECUTE) # 755, whatever the builder's umask.
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/69-phone-camera.rules DESTINATION lib/udev/rules.d)
 install(FILES linux/phone-camera.service DESTINATION lib/systemd/user)
+install(FILES ${PHONE_CAMERA_NOTICE_DIR} DESTINATION share/doc/phone-camera RENAME PHONE_CAMERA-MIT-LICENSE.txt)
+install(FILES ${MYCAM_NOTICE} DESTINATION share/doc/phone-camera RENAME MyCam-MIT-LICENSE.txt)
+install(FILES ${QRCODEGEN_NOTICE} DESTINATION share/doc/phone-camera RENAME qrcodegen-MIT-LICENSE.txt)
+install(FILES ${DEJAVU_NOTICE} DESTINATION share/doc/phone-camera RENAME DejaVu-LICENSE.txt)
 # Deliberately do not install modprobe.d/modules-load.d drop-ins. v4l2loopback
 # is system-wide and may be shared with OBS or another virtual-camera product;
 # the owner must provide or approve its module options. The daemon auto-selects
