@@ -1,0 +1,30 @@
+name: PHONE_CAMERA Android verification
+
+on:
+  push:
+    branches: [codex/unified-android-ci]
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: node native/phone-camera/pc/tools/webtest/identity_check.js
+      - name: Test and assemble debug APK
+        working-directory: native/phone-camera
+        shell: bash
+        run: |
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          ./gradlew --no-daemon --max-workers=2 testDebugUnitTest lintDebug assembleDebug
+      - name: Retain debug APK briefly
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: PHONE_CAMERA-android-debug
+          path: native/phone-camera/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 1

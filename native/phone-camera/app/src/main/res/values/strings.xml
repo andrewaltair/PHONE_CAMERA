@@ -1,0 +1,225 @@
+<resources>
+    <string name="app_name">PHONE_CAMERA</string>
+    <string name="channel_name">PHONE_CAMERA connection</string>
+
+    <!-- Notification -->
+    <string name="notification_title">PHONE_CAMERA is connected</string>
+    <string name="notification_text">Your phone is available as a webcam on the PC</string>
+    <string name="notification_title_paused">PHONE_CAMERA is paused</string>
+    <string name="notification_text_paused">The camera is off. The PC shows a “Camera paused” picture.</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="error_open_accessory">Could not open the USB connection. Unplug and plug in again.</string>
+
+    <!-- Bottom navigation, splash and the v2 pages (docs/redesign-v2.md section 3) -->
+    <string name="nav_connect">Connect</string>
+    <string name="nav_camera">Camera</string>
+    <string name="nav_settings">Settings</string>
+    <string name="splash_tagline">Turn your phone into a webcam</string>
+    <string name="splash_start">Get Started</string>
+    <string name="splash_skip_description">Continue to PHONE_CAMERA</string>
+    <string name="connect_title">Connect to PC</string>
+    <string name="connect_subtitle">Choose how you want to connect.</string>
+    <string name="connect_qr">Scan QR Code</string>
+    <string name="connect_qr_detail">Scan the code on the PC to pair and connect</string>
+    <string name="connect_qr_busy">Stop the stream to scan</string>
+    <string name="qr_title">Scan the PC’s QR code</string>
+    <string name="qr_hint">On the PC, open PHONE_CAMERA, choose Generate QR, and point this camera at the code.</string>
+    <string name="qr_old_pc">This code is from an older PHONE_CAMERA. Update PHONE_CAMERA on the PC, then scan again.</string>
+    <string name="qr_need_camera">PHONE_CAMERA needs the camera to scan the code.</string>
+    <string name="qr_no_camera">PHONE_CAMERA can’t find a camera to scan with.</string>
+    <string name="qr_close">Close</string>
+    <string name="qr_pairing">Looking for the PC…</string>
+    <string name="qr_connecting">Connecting to %1$s…</string>
+    <string name="qr_failed">Couldn’t connect</string>
+    <string name="qr_scan_again">Scan again</string>
+    <string name="qr_fail_no_pc">Can’t find the PC on this network. Check that the phone and the PC are on the same Wi-Fi, and that the QR code is still showing.</string>
+    <string name="qr_fail_code_used">That code was already used or ran out. Scan the new code the PC shows.</string>
+    <string name="qr_fail_busy">The PC is busy with another phone right now. Try again when it’s free.</string>
+    <string name="qr_fail_no_session">Found %1$s, but it didn’t connect. Scan again, or use Find Devices.</string>
+    <string name="paired_title">Paired</string>
+    <string name="paired_with">Paired with %1$s</string>
+    <string name="paired_detail">It’s connected. Choose “PHONE_CAMERA” as the camera in any app on the PC.</string>
+    <!-- Letting a PC use the camera (PROTOCOL.md "QR pairing"): asked once per PC, after it connects. -->
+    <string name="gate_title">Camera access</string>
+    <string name="gate_question">Let this PC use the camera?</string>
+    <string name="gate_detail">It’s connected, and the camera stays off until you allow it. Only allow a PC you own or trust: it can turn the camera on whenever you are both on the same network. Don’t allow forgets it.</string>
+    <string name="paired_ok">OK</string>
+    <string name="connect_find">Find Devices</string>
+    <string name="connect_find_detail">Search on the same Wi-Fi</string>
+    <string name="connect_usb">USB Connection</string>
+    <string name="connect_usb_detail">Connect via USB cable</string>
+    <string name="connect_usb_help">Plug this phone into the PC with a USB cable and tap OK when Android asks (tick “Always” so it doesn’t ask again). The cable is faster than Wi-Fi and charges the phone.</string>
+    <string name="scan_title">Scanning for devices…</string>
+    <string name="scan_title_idle">Find devices</string>
+    <string name="scan_title_done">Devices found</string>
+    <string name="scan_title_none">No devices found</string>
+    <string name="scan_hint">Make sure your PC app is open and both devices are on the same Wi-Fi network.</string>
+    <string name="scan_radar_description">Radar: looking for PCs on this Wi-Fi</string>
+    <string name="scan_again">Scan again</string>
+    <string name="scan_tap_hint">Tap a PC to connect to it. A new PC shows a code on both screens.</string>
+    <string name="back">Back</string>
+
+    <!-- Live preview on the phone (docs/redesign-v2.md 6.1) -->
+    <string name="section_preview">Preview</string>
+    <string name="preview_toggle">Show the camera on this phone</string>
+    <string name="preview_toggle_detail">Off while the screen is dimmed, and when PHONE_CAMERA is in the background.</string>
+    <string name="preview_waiting">The preview appears when an app on the PC uses the camera.</string>
+    <string name="preview_off">Preview is off.</string>
+    <string name="preview_needs_android9">A preview needs Android 9 or newer on this phone.</string>
+    <string name="preview_not_at_fps">No preview at this frame rate: the camera uses a high-speed mode that carries one output only.</string>
+    <string name="preview_refused">This camera wouldn’t show a preview while streaming. The stream comes first, so the preview stays off.</string>
+    <string name="preview_too_hot">The phone is hot, so the preview turned itself off. The stream keeps running.</string>
+    <string name="stat_resolution">Resolution</string>
+    <string name="stat_fps">FPS</string>
+    <string name="stat_zoom">Zoom</string>
+    <string name="focus_auto_toggle">Auto focus</string>
+
+    <!-- Tabs and shared bits -->
+    <string name="tab_now">Now</string>
+    <string name="tab_settings">Settings</string>
+    <string name="live">LIVE</string>
+    <string name="live_description">Live: apps on the PC see this camera</string>
+    <string name="working">Working…</string>
+    <string name="close">Close</string>
+    <string name="group_expand">Expand</string>
+    <string name="group_collapse">Collapse</string>
+    <string name="group_expanded">Expanded</string>
+    <string name="group_collapsed">Collapsed</string>
+
+    <!-- Status -->
+    <string name="status_disconnected">Not connected</string>
+    <string name="status_disconnected_detail">Plug this phone into your PC.</string>
+    <string name="get_it">Need PHONE_CAMERA for Windows? Get it</string>
+    <string name="status_idle">Ready</string>
+    <string name="status_idle_detail">The camera turns on when an app on the PC uses PHONE_CAMERA.</string>
+    <string name="status_streaming">Streaming</string>
+    <string name="status_paused">Paused</string>
+    <string name="status_paused_detail">The camera is off. Apps on the PC see a “Camera paused” picture.</string>
+    <string name="status_error">Camera problem</string>
+
+    <!-- Hero actions -->
+    <string name="action_pause_title">Pause the camera</string>
+    <string name="action_pause_detail">Apps see “Camera paused” until you resume, here or on the PC.</string>
+    <string name="action_resume_title">Resume the camera</string>
+    <string name="action_resume_detail">Video comes back as soon as an app on the PC is using PHONE_CAMERA.</string>
+
+    <!-- Camera group -->
+    <string name="section_camera">Camera</string>
+    <string name="camera_back">Back camera</string>
+    <string name="camera_front">Front camera</string>
+    <string name="controls_unknown">Zoom, brightness, focus and torch appear when an app uses the camera.</string>
+    <string name="control_zoom">Zoom</string>
+    <string name="zoom_out">Zoom out</string>
+    <string name="zoom_in">Zoom in</string>
+    <string name="control_brightness">Brightness</string>
+    <string name="brightness_down">Darker</string>
+    <string name="brightness_up">Brighter</string>
+    <string name="control_focus">Focus</string>
+    <string name="focus_auto">Auto</string>
+    <string name="focus_lock">Lock</string>
+    <string name="control_torch">Torch (phone light)</string>
+    <string name="controls_reset">Reset</string>
+    <string name="controls_reset_description">Reset zoom, brightness, focus and torch</string>
+
+    <!-- Video group -->
+    <string name="section_video">Video</string>
+    <string name="video_quality">Quality</string>
+    <string name="video_fps">Frame rate</string>
+    <string name="video_fps_unknown">60 and 120 fps become available once the camera has started, if this phone supports them.</string>
+    <string name="video_fps_only_30">This camera does 30 fps.</string>
+    <string name="video_fps_needs_or_lower">%1$d fps needs %2$s or lower on this camera.</string>
+    <string name="video_fps_needs">%1$d fps needs %2$s on this camera.</string>
+    <string name="video_fps_up_to">Up to %1$d fps at this quality. Faster rates are smoother but need good light.</string>
+    <string name="video_actual">Now: %1$s at %2$d fps</string>
+
+    <!-- Dim screen (IMPROVEMENTS.md 4.1) -->
+    <string name="action_dim">Dim screen</string>
+    <string name="dim_title">Streaming to your PC</string>
+    <string name="dim_hint">Tap anywhere to wake the screen</string>
+    <string name="heat_warm">Your phone is getting warm. A lower quality or taking it out of its case helps.</string>
+    <string name="heat_hot">Your phone is hot. Lower the quality or pause for a while, or Android may slow the camera down.</string>
+
+    <!-- Wireless mode (IMPROVEMENTS.md 11) -->
+    <string name="section_wireless">Wireless (beta)</string>
+    <string name="wireless_toggle">Use over Wi-Fi</string>
+    <string name="wireless_hint_off">Connect without a cable: the phone and the PC must be on the same Wi-Fi. The cable is faster and charges the phone.</string>
+    <string name="wireless_hint_on">This phone is %1$s. On the PC, turn on “Find phones on Wi-Fi” in PHONE_CAMERA.</string>
+    <string name="wireless_hint_no_wifi">Connect this phone to Wi-Fi (or turn on its hotspot for the PC).</string>
+    <string name="wireless_connected">Connected over Wi-Fi to %1$s</string>
+    <string name="wifi_status_off">Wi-Fi: off</string>
+    <string name="wifi_status_on">Wi-Fi: on</string>
+    <string name="wifi_status_connected">Wi-Fi: connected</string>
+    <string name="channel_wireless">Wireless connection requests</string>
+    <string name="notification_title_wireless">PHONE_CAMERA over Wi-Fi is on</string>
+    <string name="notification_text_wireless">Waiting for a PC on this Wi-Fi</string>
+    <string name="status_wireless_waiting">Waiting for your PC</string>
+    <string name="status_wireless_waiting_detail">Over Wi-Fi. The camera turns on when an app on the PC uses PHONE_CAMERA.</string>
+
+    <!-- Scan for PCs (docs/redesign.md 5.4) -->
+    <string name="scan_button">Scan for PCs</string>
+    <string name="scan_button_turn_on">Turn on and scan</string>
+    <string name="scan_button_turn_on_description">Turn on Use over Wi-Fi and scan for PCs</string>
+    <string name="scan_looking">Looking for PCs on this Wi-Fi…</string>
+    <plurals name="scan_found">
+        <item quantity="one">%1$d PC on this Wi-Fi:</item>
+        <item quantity="other">%1$d PCs on this Wi-Fi:</item>
+    </plurals>
+    <string name="scan_none">No PC found. On the PC, open PHONE_CAMERA and turn on “Find phones on Wi-Fi”. Both must be on the same Wi-Fi.</string>
+    <string name="scan_phone_address">This phone is %1$s.</string>
+    <string name="scan_status_connected">Connected</string>
+    <string name="scan_status_paired">Paired</string>
+    <string name="scan_status_new">Not paired yet: it will ask for a code when it connects</string>
+    <string name="scan_status_connecting">Asking it to connect…</string>
+    <string name="scan_row_description">%1$s, %2$s, %3$s</string>
+
+    <!-- Pairing (dialog and notification) -->
+    <string name="wireless_pair_title">Pair with %1$s?</string>
+    <string name="wireless_pair_text">Code %1$s. Check that PHONE_CAMERA on the PC shows the same code, then allow. Paired PCs connect without asking.</string>
+    <string name="pair_dialog_title">Pair with a PC</string>
+    <string name="pair_question">Allow %1$s to use this camera?</string>
+    <string name="pair_check">Check that the PC shows:</string>
+    <string name="pair_differ">If the codes differ, don’t allow.</string>
+    <string name="pair_waiting">Waiting %1$s</string>
+    <string name="pair_timed_out">Pairing timed out</string>
+    <string name="pair_timed_out_detail">%1$s wasn’t allowed in time. Start again from PHONE_CAMERA on the PC.</string>
+    <string name="wireless_allow">Allow</string>
+    <string name="wireless_deny">Don’t allow</string>
+
+    <!-- Paired PCs -->
+    <string name="section_paired">Paired PCs</string>
+    <string name="paired_none">No PCs yet. A PC asks once, with a code, the first time it connects over Wi-Fi.</string>
+    <string name="paired_forget">Forget</string>
+    <string name="paired_forget_description">Forget %1$s</string>
+    <string name="paired_forget_all">Forget all</string>
+    <string name="paired_hint">A forgotten PC has to pair again, with a code.</string>
+
+    <!-- Phone -->
+    <string name="section_phone">Phone</string>
+    <string name="auto_dim_toggle">Dim the screen automatically while streaming</string>
+    <string name="auto_dim_hint">After 30 seconds without a touch. Tap anywhere to wake it.</string>
+
+    <!-- About -->
+    <string name="section_about">About</string>
+    <string name="about_get_windows">Get PHONE_CAMERA for Windows</string>
+    <string name="about_version">Version %1$s</string>
+    <string name="about_project">PHONE_CAMERA on GitHub</string>
+    <string name="about_source">PHONE_CAMERA is based on MyCam, an MIT-licensed project by whoissaaif.</string>
+    <string name="about_source_link">View the original MyCam source (MIT)</string>
+    <string name="about_video_only">Video only: PHONE_CAMERA does not capture audio or provide a microphone.</string>
+    <string name="about_licences">Licences</string>
+    <string name="about_licences_title">Licences</string>
+    <string name="about_font">DejaVu Sans fonts</string>
+
+    <!-- First run (docs/redesign.md 5.7) -->
+    <string name="first_skip">Skip</string>
+    <string name="first_next">Next</string>
+    <string name="first_done">Got it</string>
+    <string name="first_step">Step %1$d of %2$d</string>
+    <string name="first_1_title">Install PHONE_CAMERA on your Windows PC</string>
+    <string name="first_1_text">PHONE_CAMERA for Windows makes this phone a camera that any app can use.</string>
+    <string name="first_2_title">Plug in this phone</string>
+    <string name="first_2_text">Use a USB cable. Tap OK when Android asks, and tick Always.</string>
+    <string name="first_3_title">Pick “PHONE_CAMERA” as the camera in any app</string>
+    <string name="first_3_text">Video calls, streaming or recording: choose PHONE_CAMERA in the app’s camera settings. This phone does the rest.</string>
+</resources>
