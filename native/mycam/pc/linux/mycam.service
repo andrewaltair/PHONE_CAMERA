@@ -1,0 +1,13 @@
+# The MyCam companion for the logged-in user (a systemd user unit: the camera belongs to a desktop session).
+# Enabled for every user by the package; per user: systemctl --user disable --now mycam
+[Unit]
+Description=MyCam: phone as a webcam
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/mycam-companion --daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

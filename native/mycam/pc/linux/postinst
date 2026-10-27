@@ -1,0 +1,29 @@
+#!/bin/sh
+# MyCam .deb: make the camera and USB access work without manual steps.
+set -e
+if [ "$1" = "configure" ]; then
+    # USB access for the logged-in user (69-mycam.rules), for phones already plugged in too.
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger --subsystem-match=usb --action=add || true
+    fi
+    # The camera device. Loaded now if possible; at every boot via modules-load.d.
+    if ! modinfo v4l2loopback >/dev/null 2>&1; then
+        echo "MyCam: the v4l2loopback kernel module is missing. Install it, then reboot:" >&2
+        echo "  sudo apt install v4l2loopback-dkms" >&2
+    elif ! lsmod | grep -q '^v4l2loopback '; then
+        modprobe v4l2loopback || echo "MyCam: could not load v4l2loopback now; it loads at the next boot." >&2
+    elif [ ! -e /dev/video10 ]; then
+        # Already loaded by something else (OBS's virtual camera, say) with other options: don't pull it out
+        # from under that program.
+        echo "MyCam: v4l2loopback is already loaded without MyCam's device. Reboot to use MyCam's settings," >&2
+        echo "  or run mycam-companion with --device pointing at an existing loopback device." >&2
+    fi
+    # Start with every user's session from now on.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --global enable mycam.service || true
+    fi
+    echo "MyCam is installed. It starts with your next login, or now: systemctl --user start mycam" >&2
+    echo "To connect an iPhone: mycam-companion --pair" >&2
+fi
+exit 0

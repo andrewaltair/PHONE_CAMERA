@@ -11,7 +11,7 @@
 [![Deps](https://img.shields.io/badge/dependencies-2-lightgrey)](package.json)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-roadmap)
 
-Open a URL on your iPhone → point the camera → see & hear it live on your PC in **~100–200 ms**, all over your
+Open a URL on your iPhone → point the camera → see & hear it live on your PC over your
 local Wi‑Fi or a USB cable. Then feed it into **Zoom / Discord / Meet / OBS** as a real camera. No App Store, no
 Xcode, no cloud — the phone just uses Safari, and every line of the server is in this repo.
 
@@ -24,13 +24,28 @@ Xcode, no cloud — the phone just uses Safari, and every line of the server is 
 | | |
 |---|---|
 | 📷 **Live camera + mic** | iPhone Safari → PC browser, peer‑to‑peer WebRTC. Zero install on the phone. |
-| ⚡ **Sub‑200 ms latency** | Hardware H.264, tunable jitter buffer, a live **latency HUD** (RTT · buffer · fps · loss). |
+| ⚡ **Latency controls** | H.264 is preferred where available, with a tunable jitter buffer and a live **latency HUD** (RTT · buffer · fps · loss). Actual end-to-end latency varies by device and network. |
 | 🔌 **Use it as a system camera** | Pipe into **OBS Virtual Camera** → selectable in Zoom, Meet, Discord, Teams, the browser. |
 | 🎛️ **Control the phone from the PC** | Quality (480p–1080p / 30–60 fps), bitrate, lens switch, zoom & torch — *capability‑gated* so you only see what your device supports. |
-| 📶 **Wi‑Fi or USB** | Same Wi‑Fi, **or** a USB cable (Personal Hotspot link) for rock‑steady, jitter‑free latency. |
+| 📶 **Wi‑Fi or USB** | Same Wi‑Fi, **or** a USB cable using the iPhone Personal Hotspot IP link. |
 | 🔒 **Trusted local HTTPS** | One‑time `mkcert` CA → no browser warnings; everything stays on your LAN. |
 | 📲 **Scan‑to‑connect** | The server prints a **QR code** of the phone URL — point the iPhone camera at it, done. |
+| ⏹️ **Stop & release** | Stop the phone stream and release its camera and microphone; starting again requires an explicit tap. |
+| 📊 **Actual capture and receive data** | Show the capture settings reported by the phone and received frame size/FPS when the browser exposes them. |
 | 🧰 **One‑command setup** | `setup.ps1` auto‑detects your IP, issues the cert, and launches the server. |
+
+---
+
+## Native companion source
+
+This repository also includes the unmodified [MyCam](https://github.com/whoissaaif/mycam) source at
+[`native/mycam`](native/mycam), from upstream commit `a0499eab7375a99db6a6ca5ee3b8faa7f2d35f6a`.
+It is a **separate native application**, not an automatic replacement for the WebRTC/OBS mode below.
+Its source includes Android USB and Wi-Fi support, a native Windows virtual camera, and an iPhone browser
+path. Linux support in that upstream revision is a preview. See the [feature comparison](docs/COMPARISON.md)
+and [native source and build notes](docs/MYCAM_NATIVE.md) for platform limits, build instructions and
+attribution. Importing source does not install a driver or
+prove a working camera on a particular device.
 
 ---
 
@@ -51,6 +66,10 @@ flowchart LR
 | `phone.html`  | iPhone Safari | Captures camera + mic, sends the stream, applies remote controls. |
 | `viewer.html` | PC (Chrome/Edge) | Watch live + latency HUD + camera control bar. |
 | `source.html` | OBS Browser Source | Clean, UI‑less feed for the virtual camera (served over plain `http://localhost`). |
+
+The current signaling room has one phone and one receiving slot. The PC viewer and the OBS source
+therefore cannot receive simultaneously; opening one replaces the other. A replaced phone releases its
+camera, and a replaced viewer stops reconnecting until you explicitly retry or reload.
 
 ---
 
@@ -102,7 +121,7 @@ Then:
 
 ## 🔌 Use it in Zoom / Discord / Meet (OBS Virtual Camera)
 
-Windows has no built‑in virtual camera, so register one with **OBS Studio** (free) and point it at the
+For the WebRTC mode, use **OBS Studio** (free) as a virtual camera and point it at the
 clean source page this server hosts on `http://localhost:8080/source.html`:
 
 1. Install **OBS Studio** (this registers the *OBS Virtual Camera* device system‑wide).
@@ -118,9 +137,9 @@ clean source page this server hosts on `http://localhost:8080/source.html`:
 ## 🎛️ Camera controls (from the PC)
 
 The viewer shows a control bar that commands the iPhone live. The phone reports its **real capabilities**
-on connect, so you only ever see controls that actually work on your device:
+on connect. Available controls and the result of a quality request depend on the browser and device:
 
-- **Quality** — 480p / 720p / 1080p · 30 / 60 fps *(also your latency‑vs‑sharpness knob)*
+- **Quality requests** — 480p / 720p / 1080p · 30 / 60 fps. The phone reports the capture settings it actually accepted; the requested combination is not a guarantee.
 - **Bitrate** — 2 / 6 / 12 Mbps
 - **Lens** — front / back / ultra‑wide / telephoto (when the device exposes them)
 - **Zoom** & **🔦 Torch** — *if supported* (iOS Safari usually hides these — an Apple limitation, not a bug)
@@ -130,7 +149,7 @@ on connect, so you only ever see controls that actually work on your device:
 ## 🔌 USB cable mode (most stable latency)
 
 No “USB webcam” exists for iPhone on Windows, but **Personal Hotspot over USB** creates a direct wired IP
-link — and the same app runs over it untouched, with **zero Wi‑Fi jitter**.
+link — the same app can then use that wired network path.
 
 1. Install the **Apple Devices** app (Microsoft Store) so Windows gets the *Apple Mobile Device Ethernet* adapter.
 2. Plug in the iPhone → **Trust** → **Settings → Personal Hotspot → Allow Others to Join = ON**.
@@ -142,23 +161,24 @@ link — and the same app runs over it untouched, with **zero Wi‑Fi jitter**.
 
 ## 🚀 Latency tuning
 
-WebRTC is already the lowest‑latency browser transport. The build ships tuned for it:
+The WebRTC mode includes controls that can help tune latency:
 
 - **Receiver jitter buffer** → `jitterBufferTarget = 0`, with live **0 / 30 / 80 ms** buttons (bump up if it stutters).
 - **Latency HUD** → `RTT · jbuf · fps · loss` from `getStats()`, so you tune by numbers.
 - **Sender** → hardware **H.264**, `maintain-framerate`, `contentHint = 'motion'`.
-- **Physical** → phone on **5 GHz** near the router, PC on Ethernet, or **USB** for zero jitter.
+- **Physical** → try a nearby **5 GHz** Wi-Fi connection, PC Ethernet, or the iPhone's USB hotspot link; compare the results on your devices.
 
-**Reality check:** the floor is ~80–150 ms (sensor + encode + decode + render + one network hop). That part is physics, not a bug.
+The HUD reports network and receiver statistics; it does not measure sensor-to-screen delay. Measure on the
+actual phone, PC and connection before comparing latency or quality.
 
 ---
 
 ## 🔒 Security
 
-- **LAN‑only by design** — the server binds your local network; nothing is sent to the cloud.
+- **Local transport** — WebRTC uses local network candidates by default; media is peer-to-peer rather than relayed by the Node server.
 - **Trusted local cert** via `mkcert` (a local CA on your machine), so no browser warnings and iOS accepts the camera.
 - **No secrets in this repo** — `cert/` (private keys), `mkcert.exe`, and `node_modules/` are git‑ignored.
-- For untrusted networks, add a join PIN (see the roadmap).
+- **No pairing PIN in the WebRTC mode yet.** Anyone able to reach the signaling server can attempt to join or replace a peer; use a trusted network. MyCam's separate native mode has its own pairing flow.
 
 ---
 
@@ -219,4 +239,5 @@ Just **two** runtime dependencies.
 
 ## 📄 License
 
-[MIT](LICENSE) © 2026 Andrew Altair
+[MIT](LICENSE) © 2026 Andrew Altair. The separately included MyCam source retains its original MIT
+license and third-party notices under [`native/mycam`](native/mycam); see [native source notes](docs/MYCAM_NATIVE.md).

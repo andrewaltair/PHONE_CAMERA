@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyCam web test 2</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; max-width: 640px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 6px 0 12px; opacity: .8; font-size: 14px; }
+  button { font-size: 17px; padding: 12px 18px; border-radius: 10px; border: 0; background: #0a7aff; color: #fff; margin: 4px 6px 4px 0; }
+  button:disabled { opacity: .5; }
+  button.secondary { background: #8884; color: inherit; }
+  video { width: 100%; max-height: 40vh; background: #000; border-radius: 10px; margin-top: 8px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: #8882; padding: 10px; border-radius: 10px; }
+</style>
+</head>
+<body>
+<h1>MyCam web test 2: send frames to the PC</h1>
+<p>Sends the encoded camera video to the PC over a secure WebSocket and times the round trip. Turn Low Power Mode off, keep this page open and the screen on until it says DONE (about 45 seconds).</p>
+<button id="start">Start</button>
+<button id="copy" class="secondary" disabled>Copy results</button>
+<video id="video" playsinline muted></video>
+<pre id="out">Ready.</pre>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const out = $("out"), video = $("video"), startBtn = $("start"), copyBtn = $("copy");
+video.muted = true; video.playsInline = true;
+
+const report = { test: "wss", when: new Date().toISOString(), ua: navigator.userAgent, steps: {} };
+const log = (line) => { out.textContent += "\n" + line; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function pct(arr, p) {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(1);
+}
+function avg(arr) { return arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : null; }
+function stats(arr) {
+  return { n: arr.length, avg: avg(arr), p50: pct(arr, 0.5), p95: pct(arr, 0.95), max: arr.length ? +Math.max(...arr).toFixed(1) : null };
+}
+
+function codecFor(w, h, fps) {
+  const px = w * h;
+  if (px <= 1280 * 720) return fps <= 30 ? "avc1.42001f" : "avc1.420020";
+  if (px <= 1920 * 1088) return fps <= 30 ? "avc1.420028" : "avc1.42002a";
+  return fps <= 30 ? "avc1.420033" : "avc1.420034";
+}
+function encoderConfig(w, h, fps) {
+  return {
+    codec: codecFor(w, h, fps), width: w, height: h, framerate: fps,
+    bitrate: fps >= 60 ? 12_000_000 : 8_000_000,
+    latencyMode: "realtime", hardwareAcceleration: "prefer-hardware",
+    avc: { format: "annexb" },
+  };
+}
+
+// ---- WebSocket ----
+let ws = null;
+let ackSink = null; // receives round-trip times in ms
+function openWs() {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket("wss://" + location.host + "/ws");
+    socket.binaryType = "arraybuffer";
+    const timer = setTimeout(() => reject(new Error("WebSocket did not open within 8 s")), 8000);
+    socket.onopen = () => { clearTimeout(timer); resolve(socket); };
+    socket.onerror = () => { clearTimeout(timer); reject(new Error("WebSocket error (certificate refused, or the server is not reachable)")); };
+    socket.onmessage = (e) => {
+      if (typeof e.data === "string" || e.data.byteLength < 12) return;
+      const rtt = performance.now() - new DataView(e.data).getFloat64(4);
+      if (ackSink) ackSink(rtt);
+    };
+  });
+}
+
+async function idlePing(count, gapMs) {
+  const rtts = [];
+  ackSink = (r) => rtts.push(r);
+  for (let i = 0; i < count; i++) {
+    const buf = new ArrayBuffer(12);
+    const dv = new DataView(buf);
+    dv.setUint32(0, i); dv.setFloat64(4, performance.now());
+    ws.send(buf);
+    await sleep(gapMs);
+  }
+  await sleep(300);
+  ackSink = null;
+  return rtts;
+}
+
+async function openCamera(w, h, fps) {
+  if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop());
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: { ideal: "environment" }, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } },
+  });
+  video.srcObject = stream;
+  await video.play();
+  await new Promise((r) => (video.videoWidth ? r() : video.addEventListener("loadedmetadata", r, { once: true })));
+  return stream;
+}
+
+async function sendTest(w, h, fps, seconds) {
+  const label = w + "x" + h + "@" + fps;
+  await openCamera(w, h, fps);
+  const cw = video.videoWidth, ch = video.videoHeight;
+  const cfg = encoderConfig(cw, ch, fps);
+
+  const starts = new Map(), pipeline = [], rtts = [];
+  let seq = 0, sent = 0, sentBytes = 0, skipped = 0, bufMax = 0, inFrames = 0, lastErr = null, lastTs = 0, forceKey = false;
+  ackSink = (r) => rtts.push(r);
+
+  const enc = new VideoEncoder({
+    output: (chunk) => {
+      const t = starts.get(chunk.timestamp);
+      const now = performance.now();
+      if (t !== undefined) { pipeline.push(now - t); starts.delete(chunk.timestamp); }
+      const buf = new ArrayBuffer(13 + chunk.byteLength);
+      const dv = new DataView(buf);
+      dv.setUint32(0, seq++); dv.setFloat64(4, now); dv.setUint8(12, chunk.type === "key" ? 1 : 0);
+      chunk.copyTo(new Uint8Array(buf, 13));
+      ws.send(buf);
+      sent++; sentBytes += buf.byteLength;
+      if (ws.bufferedAmount > bufMax) bufMax = ws.bufferedAmount;
+    },
+    error: (e) => { lastErr = String(e.message || e); },
+  });
+  enc.configure(cfg);
+
+  let stop = false;
+  const schedule = () => { if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(pump); else requestAnimationFrame(pump); };
+  function pump() {
+    if (stop) return;
+    // If the network backs up, skip frames and ask for a key frame next, like a real sender would.
+    if (ws.bufferedAmount > 1_000_000 || enc.encodeQueueSize > 3) { skipped++; forceKey = true; schedule(); return; }
+    let ts = Math.round(performance.now() * 1000);
+    if (ts <= lastTs) ts = lastTs + 1;
+    lastTs = ts;
+    const frame = new VideoFrame(video, { timestamp: ts });
+    starts.set(ts, performance.now());
+    enc.encode(frame, { keyFrame: forceKey || inFrames % fps === 0 });
+    forceKey = false;
+    frame.close();
+    inFrames++;
+    schedule();
+  }
+  const t0 = performance.now();
+  schedule();
+  await sleep(seconds * 1000);
+  stop = true;
+  const elapsed = (performance.now() - t0) / 1000;
+  try { await enc.flush(); } catch (e) { lastErr = lastErr || String(e.message || e); }
+  try { enc.close(); } catch (e) { /* ignore */ }
+  await sleep(1000); // let the last acknowledgements arrive
+  ackSink = null;
+
+  const result = {
+    requested: label, camera: cw + "x" + ch, codec: cfg.codec, seconds: +elapsed.toFixed(1),
+    framesIn: inFrames, framesSent: sent, skippedBecauseBacklog: skipped, acksReceived: rtts.length,
+    fpsSent: +(sent / elapsed).toFixed(1),
+    mbps: +((sentBytes * 8) / elapsed / 1e6).toFixed(2),
+    maxBufferedKB: Math.round(bufMax / 1024),
+    captureToSendMs: stats(pipeline),
+    networkRoundTripMs: stats(rtts),
+    error: lastErr,
+  };
+  log("   " + label + ": sent " + result.fpsSent + " fps, " + result.mbps + " Mbps, skipped " + skipped +
+      ", round trip avg " + result.networkRoundTripMs.avg + " ms (p95 " + result.networkRoundTripMs.p95 +
+      ", max " + result.networkRoundTripMs.max + "), max backlog " + result.maxBufferedKB + " KB" +
+      (lastErr ? ", ERROR: " + lastErr : ""));
+  return result;
+}
+
+async function run() {
+  startBtn.disabled = true; copyBtn.disabled = true;
+  out.textContent = "Running...";
+  let wake = null;
+  try { if ("wakeLock" in navigator) wake = await navigator.wakeLock.request("screen"); } catch (e) { /* ignore */ }
+
+  try {
+    log("1. opening wss://" + location.host + "/ws ...");
+    ws = await openWs();
+    report.steps.websocket = "opened";
+    log("   WebSocket opened (the self-signed certificate is accepted for wss)");
+
+    log("2. idle round trip (20 small messages):");
+    const idle = await idlePing(20, 100);
+    report.steps.idleRoundTripMs = stats(idle);
+    log("   " + JSON.stringify(report.steps.idleRoundTripMs));
+
+    log("3. camera -> encoder -> wss (15 s each, rear camera):");
+    report.steps.sendTests = [];
+    for (const [w, h, fps] of [[1920, 1080, 30], [1920, 1080, 60]]) {
+      try { report.steps.sendTests.push(await sendTest(w, h, fps, 15)); }
+      catch (e) {
+        const msg = (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : e);
+        log("   " + w + "x" + h + "@" + fps + " FAILED: " + msg);
+        report.steps.sendTests.push({ requested: w + "x" + h + "@" + fps, error: msg });
+      }
+    }
+  } catch (e) {
+    const msg = (e && e.message) ? e.message : String(e);
+    log("FAILED: " + msg);
+    report.fatal = msg;
+  }
+
+  if (video.srcObject) { video.srcObject.getTracks().forEach((t) => t.stop()); video.srcObject = null; }
+  if (ws) { try { ws.close(); } catch (e) { /* ignore */ } }
+  if (wake) { try { await wake.release(); } catch (e) { /* ignore */ } }
+
+  try {
+    const res = await fetch("/report", { method: "POST", body: JSON.stringify(report) });
+    log("DONE. Results sent to the PC (" + res.status + ").");
+  } catch (e) {
+    log("DONE, but sending to the PC failed: " + e.message + ". Use Copy results.");
+  }
+  startBtn.disabled = false; copyBtn.disabled = false;
+}
+
+startBtn.addEventListener("click", run);
+copyBtn.addEventListener("click", async () => {
+  const text = JSON.stringify(report, null, 2);
+  try { await navigator.clipboard.writeText(text); log("Copied."); }
+  catch (e) { out.textContent = text; log("\n(Copy was refused; the text above is selectable.)"); }
+});
+</script>
+</body>
+</html>

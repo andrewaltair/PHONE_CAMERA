@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  android:
+    name: Android (build, unit tests, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Lint
+        run: ./gradlew lintDebug
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug
+
+  pc:
+    name: PC companion (build + ctest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S pc -B pc/build -A x64
+
+      - name: Build
+        run: cmake --build pc/build --config Release
+
+      - name: Test
+        run: ctest --test-dir pc/build -C Release --output-on-failure
+
+  pc-linux:
+    name: PC companion, Linux (build + ctest)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libavcodec-dev libavutil-dev libswscale-dev libusb-1.0-0-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Configure
+        run: cmake -S pc -B pc/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build pc/build
+
+      - name: Test
+        run: ctest --test-dir pc/build --output-on-failure
+
+      - name: Package
+        run: cd pc/build && cpack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mycam-deb
+          path: pc/build/*.deb

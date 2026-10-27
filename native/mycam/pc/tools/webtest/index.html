@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyCam web test</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; max-width: 640px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 6px 0 12px; opacity: .8; font-size: 14px; }
+  button { font-size: 17px; padding: 12px 18px; border-radius: 10px; border: 0; background: #0a7aff; color: #fff; margin: 4px 6px 4px 0; }
+  button:disabled { opacity: .5; }
+  button.secondary { background: #8884; color: inherit; }
+  video { width: 100%; max-height: 40vh; background: #000; border-radius: 10px; margin-top: 8px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: #8882; padding: 10px; border-radius: 10px; }
+</style>
+</head>
+<body>
+<h1>MyCam web test</h1>
+<p>Step 1 of the iPhone web-page idea. Tap Start, allow the camera, and keep this page open and the screen on until it says DONE (about 40 seconds).</p>
+<button id="start">Start</button>
+<button id="copy" class="secondary" disabled>Copy results</button>
+<video id="video" playsinline muted></video>
+<pre id="out">Ready.</pre>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const out = $("out"), video = $("video"), startBtn = $("start"), copyBtn = $("copy");
+video.muted = true; video.playsInline = true;
+
+const report = { when: new Date().toISOString(), ua: navigator.userAgent, steps: {} };
+
+function log(line) { out.textContent += "\n" + line; }
+function pct(arr, p) {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(1);
+}
+function avg(arr) { return arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : null; }
+
+// H.264 profile/level for a given size and fps (baseline profile, like the Android app).
+function codecFor(w, h, fps) {
+  const px = w * h;
+  if (px <= 1280 * 720) return fps <= 30 ? "avc1.42001f" : "avc1.420020";
+  if (px <= 1920 * 1088) return fps <= 30 ? "avc1.420028" : "avc1.42002a";
+  return fps <= 30 ? "avc1.420033" : "avc1.420034";
+}
+function encoderConfig(w, h, fps) {
+  return {
+    codec: codecFor(w, h, fps), width: w, height: h, framerate: fps,
+    bitrate: w * h >= 3840 * 2160 ? 20_000_000 : w * h >= 1920 * 1080 ? 8_000_000 : 4_000_000,
+    latencyMode: "realtime", hardwareAcceleration: "prefer-hardware",
+    avc: { format: "annexb" },
+  };
+}
+
+async function checkEnvironment() {
+  report.steps.environment = {
+    secureContext: window.isSecureContext,
+    hasGetUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+    hasVideoEncoder: "VideoEncoder" in window,
+    hasVideoFrame: "VideoFrame" in window,
+    hasMediaStreamTrackProcessor: "MediaStreamTrackProcessor" in window,
+    hasRequestVideoFrameCallback: "requestVideoFrameCallback" in HTMLVideoElement.prototype,
+    hasWakeLock: "wakeLock" in navigator,
+  };
+  log("1. environment: " + JSON.stringify(report.steps.environment));
+}
+
+async function checkEncoderSupport() {
+  const sizes = [[1280, 720], [1920, 1080], [3840, 2160]];
+  const fpss = [30, 60];
+  const rows = [];
+  if (!("VideoEncoder" in window)) { log("2. VideoEncoder missing: this Safari cannot do WebCodecs."); report.steps.encoderSupport = "missing"; return; }
+  for (const [w, h] of sizes) {
+    for (const fps of fpss) {
+      const cfg = encoderConfig(w, h, fps);
+      let supported = false, hwFlag = null, error = null;
+      try { const r = await VideoEncoder.isConfigSupported(cfg); supported = r.supported; hwFlag = r.config && r.config.hardwareAcceleration; }
+      catch (e) { error = String(e.message || e); }
+      rows.push({ size: w + "x" + h, fps, codec: cfg.codec, supported, hardwareAcceleration: hwFlag, error });
+    }
+  }
+  report.steps.encoderSupport = rows;
+  log("2. H.264 encoder support:");
+  for (const r of rows) log("   " + r.size + "@" + r.fps + " " + r.codec + " -> " + (r.supported ? "yes" : "NO") + (r.error ? " (" + r.error + ")" : ""));
+}
+
+async function openCamera(w, h, fps, facing) {
+  if (video.srcObject) { video.srcObject.getTracks().forEach((t) => t.stop()); }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: { ideal: facing }, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } },
+  });
+  video.srcObject = stream;
+  await video.play();
+  await new Promise((r) => (video.videoWidth ? r() : video.addEventListener("loadedmetadata", r, { once: true })));
+  return stream;
+}
+
+async function encodeTest(w, h, fps, seconds) {
+  const label = w + "x" + h + "@" + fps;
+  const stream = await openCamera(w, h, fps, "environment");
+  const track = stream.getVideoTracks()[0];
+  const settings = track.getSettings();
+  let caps = null;
+  try { caps = track.getCapabilities ? track.getCapabilities() : null; } catch (e) { /* ignore */ }
+  const cw = video.videoWidth, ch = video.videoHeight;
+  const cfg = encoderConfig(cw, ch, fps);
+
+  const starts = new Map(), delays = [];
+  let outBytes = 0, outCount = 0, keys = 0, inFrames = 0, dropped = 0, lastErr = null, lastTs = 0;
+  const enc = new VideoEncoder({
+    output: (chunk) => {
+      const t = starts.get(chunk.timestamp);
+      if (t !== undefined) { delays.push(performance.now() - t); starts.delete(chunk.timestamp); }
+      outBytes += chunk.byteLength; outCount++; if (chunk.type === "key") keys++;
+    },
+    error: (e) => { lastErr = String(e.message || e); },
+  });
+  enc.configure(cfg);
+
+  let stop = false;
+  const schedule = () => {
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(pump);
+    else requestAnimationFrame(pump);
+  };
+  function pump() {
+    if (stop) return;
+    if (enc.encodeQueueSize > 3) { dropped++; schedule(); return; }
+    let ts = Math.round(performance.now() * 1000);
+    if (ts <= lastTs) ts = lastTs + 1;
+    lastTs = ts;
+    const frame = new VideoFrame(video, { timestamp: ts });
+    starts.set(ts, performance.now());
+    enc.encode(frame, { keyFrame: inFrames % fps === 0 });
+    frame.close();
+    inFrames++;
+    schedule();
+  }
+  const t0 = performance.now();
+  schedule();
+  await new Promise((r) => setTimeout(r, seconds * 1000));
+  stop = true;
+  const elapsed = (performance.now() - t0) / 1000;
+  try { await enc.flush(); } catch (e) { lastErr = lastErr || String(e.message || e); }
+  try { enc.close(); } catch (e) { /* ignore */ }
+
+  const result = {
+    requested: label,
+    camera: { width: cw, height: ch, settings, hasZoom: !!(caps && caps.zoom), hasTorch: !!(caps && caps.torch), hasFocusMode: !!(caps && caps.focusMode) },
+    codec: cfg.codec,
+    seconds: +elapsed.toFixed(1),
+    framesIn: inFrames, framesOut: outCount, dropped, keyFrames: keys,
+    fpsIn: +(inFrames / elapsed).toFixed(1), fpsOut: +(outCount / elapsed).toFixed(1),
+    kbps: Math.round((outBytes * 8) / elapsed / 1000),
+    encodeDelayMs: { avg: avg(delays), p50: pct(delays, 0.5), p95: pct(delays, 0.95), max: delays.length ? +Math.max(...delays).toFixed(1) : null },
+    error: lastErr,
+  };
+  log("   " + label + ": camera " + cw + "x" + ch + ", in " + result.fpsIn + " fps, out " + result.fpsOut + " fps, " +
+      result.kbps + " kbps, encode delay avg " + result.encodeDelayMs.avg + " ms (p95 " + result.encodeDelayMs.p95 + ")" +
+      (lastErr ? ", ERROR: " + lastErr : ""));
+  return result;
+}
+
+async function run() {
+  startBtn.disabled = true; copyBtn.disabled = true;
+  out.textContent = "Running...";
+  let wake = null;
+  try { if ("wakeLock" in navigator) { wake = await navigator.wakeLock.request("screen"); report.steps.wakeLock = "granted"; } }
+  catch (e) { report.steps.wakeLock = "refused: " + (e.message || e); }
+  log("   wake lock: " + report.steps.wakeLock);
+
+  try {
+    await checkEnvironment();
+    await checkEncoderSupport();
+
+    log("3. camera + encode (10 s each, rear camera):");
+    report.steps.encodeTests = [];
+    for (const [w, h, fps] of [[1920, 1080, 30], [1920, 1080, 60], [1280, 720, 30]]) {
+      try { report.steps.encodeTests.push(await encodeTest(w, h, fps, 10)); }
+      catch (e) {
+        const msg = (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : e);
+        log("   " + w + "x" + h + "@" + fps + " FAILED: " + msg);
+        report.steps.encodeTests.push({ requested: w + "x" + h + "@" + fps, error: msg });
+        if (e && e.name === "NotAllowedError") break;
+      }
+    }
+  } catch (e) {
+    log("FAILED: " + (e && e.message ? e.message : e));
+    report.fatal = String(e && e.message ? e.message : e);
+  }
+
+  if (video.srcObject) { video.srcObject.getTracks().forEach((t) => t.stop()); video.srcObject = null; }
+  if (wake) { try { await wake.release(); } catch (e) { /* ignore */ } }
+
+  try {
+    const res = await fetch("/report", { method: "POST", body: JSON.stringify(report) });
+    log("DONE. Results sent to the PC (" + res.status + ").");
+  } catch (e) {
+    log("DONE, but sending to the PC failed: " + e.message + ". Use Copy results.");
+  }
+  startBtn.disabled = false; copyBtn.disabled = false;
+}
+
+startBtn.addEventListener("click", run);
+copyBtn.addEventListener("click", async () => {
+  const text = JSON.stringify(report, null, 2);
+  try { await navigator.clipboard.writeText(text); log("Copied."); }
+  catch (e) { out.textContent = text; log("\n(Copy was refused; the text above is selectable.)"); }
+});
+</script>
+</body>
+</html>

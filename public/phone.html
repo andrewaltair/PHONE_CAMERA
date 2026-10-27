@@ -15,6 +15,7 @@
   button { flex: 1; padding: 15px; font-size: 16px; border: 0; border-radius: 12px;
     background: #2b6cff; color: #fff; font-weight: 600; }
   button.alt { background: #1b2230; color: #cbd5e1; }
+  button.danger { background: #8f2732; color: #fff; }
   button:disabled { opacity: .5; }
 </style>
 </head>
@@ -24,151 +25,542 @@
   <div id="status">tap "Start streaming" to share this camera with the PC</div>
   <div id="bar">
     <button id="start">Start streaming</button>
-    <button id="flip" class="alt">Flip camera</button>
+    <button id="stop" class="danger" disabled>Stop &amp; release</button>
+    <button id="flip" class="alt" disabled>Flip camera</button>
   </div>
 </div>
 <script>
 const $  = (id) => document.getElementById(id);
 const log = (t) => { $('status').textContent = t; console.log('[phone]', t); };
 
-const LAN_ONLY = false;   // true -> drop STUN, host-only candidates (max-direct path)
-const RTC_CFG = LAN_ONLY ? { iceServers: [] } : { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+// LAN-only is intentional: this project does not silently send camera traffic
+// through a public STUN service. A future relay/TURN mode must be explicit.
+const LAN_ONLY = true;
+const RTC_CFG = { iceServers: [] };
+const MAX_SIGNAL_RECONNECTS = 6;
+const MAX_PENDING_ICE = 64;
+const MAX_SWAP_PC_SYNCS = 3;
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 8000;
 
-let pc, ws, localStream;
+let pc = null;
+let ws = null;
+let localStream = null;
 let facing = 'environment';
 let started = false;
+let starting = false;
+let userStopped = true;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let pendingIce = [];
+let remoteDescriptionReady = false;
+let iceAddChain = Promise.resolve();
+let captureGeneration = 0;
+let offerGeneration = 0;
+const inFlightStreams = new Set();
+let captureSession = 0;
+let cameraQueue = Promise.resolve();
+let cameraRequestSequence = 0;
 
-function vtrack() { return localStream && localStream.getVideoTracks()[0]; }
+function isSocketOpen(socket) {
+  return !!socket && socket.readyState === WebSocket.OPEN;
+}
 
-async function getCam(constraints) {
-  if (localStream) localStream.getTracks().forEach((t) => t.stop());
-  localStream = await navigator.mediaDevices.getUserMedia(constraints || {
+function sendSignal(message, socket = ws, ownerPc = null) {
+  if (ownerPc && ownerPc !== pc) return false;
+  if (!socket || socket !== ws || !isSocketOpen(socket)) return false;
+  try { socket.send(JSON.stringify(message)); return true; } catch (e) { return false; }
+}
+
+function clearReconnect() {
+  if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+
+function scheduleReconnect(reason) {
+  if (userStopped || !started || reconnectTimer !== null) return;
+  if (reconnectAttempts >= MAX_SIGNAL_RECONNECTS) {
+    stopStreaming('signaling retry limit reached — camera released; tap Start streaming to retry');
+    return;
+  }
+  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * (2 ** reconnectAttempts));
+  reconnectAttempts += 1;
+  log(reason + ' — retry ' + reconnectAttempts + '/' + MAX_SIGNAL_RECONNECTS);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!userStopped && started) connectWS();
+  }, delay);
+}
+
+function vtrack(stream = localStream) {
+  return stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+}
+
+function captureIsCurrent(generation) {
+  return generation === captureGeneration && !userStopped;
+}
+
+function stopTracks(stream) {
+  if (!stream || typeof stream.getTracks !== 'function') return;
+  for (const track of stream.getTracks()) {
+    try { track.stop(); } catch (e) {}
+  }
+}
+
+function stopInFlightStreams() {
+  for (const stream of inFlightStreams) stopTracks(stream);
+  inFlightStreams.clear();
+}
+
+function queueCameraOperation(constraints) {
+  // All camera acquisitions/switches share one queue. A later request cannot
+  // invalidate an earlier successful swap while the browser still owns it.
+  const requestSession = captureSession;
+  const requestId = ++cameraRequestSequence;
+  const task = cameraQueue.catch(() => null).then(async () => {
+    if (requestSession !== captureSession || userStopped) return null;
+    const operationGeneration = ++captureGeneration;
+    const stream = await getCam(constraints, operationGeneration);
+    return { stream, generation: operationGeneration };
+  });
+  // Keep the queue usable after a rejected camera request while preserving the
+  // rejection for this caller to report. Stop invalidates old entries; the
+  // chain remains serialized until the browser settles the active operation.
+  cameraQueue = task.catch(() => null);
+  return { promise: task, requestId, session: requestSession };
+}
+
+function readSettings(track = vtrack()) {
+  if (!track || typeof track.getSettings !== 'function') return null;
+  try {
+    const s = track.getSettings() || {};
+    return {
+      width: Number.isFinite(s.width) ? s.width : null,
+      height: Number.isFinite(s.height) ? s.height : null,
+      frameRate: Number.isFinite(s.frameRate) ? s.frameRate : null,
+      deviceId: s.deviceId || null,
+      facingMode: s.facingMode || null,
+    };
+  } catch (e) { return null; }
+}
+
+function settingsText(settings) {
+  if (!settings) return 'actual camera settings unavailable';
+  const size = settings.width && settings.height ? settings.width + '×' + settings.height : 'size unavailable';
+  const fps = settings.frameRate ? ' @ ' + Math.round(settings.frameRate) + ' fps' : '';
+  return 'actual capture: ' + size + fps;
+}
+
+function bindTrackLifecycle(stream) {
+  for (const track of (stream.getTracks ? stream.getTracks() : [])) {
+    track.onended = () => {
+      if (localStream !== stream || userStopped) return;
+      stopStreaming(track.kind === 'video'
+        ? 'camera ended — capture released; tap Start streaming to retry'
+        : 'microphone ended — capture released; tap Start streaming to retry');
+    };
+  }
+}
+
+async function swapTracks(stream = localStream, targetPc = pc) {
+  if (!targetPc || !stream || typeof targetPc.getSenders !== 'function') return;
+  const senders = targetPc.getSenders();
+  const vt = vtrack(stream);
+  const vs = senders.find((s) => s.track && s.track.kind === 'video');
+  if (vs && vt && typeof vs.replaceTrack === 'function') await vs.replaceTrack(vt);
+  const at = stream.getAudioTracks ? stream.getAudioTracks()[0] : null;
+  const as = senders.find((s) => s.track && s.track.kind === 'audio');
+  if (as && at && typeof as.replaceTrack === 'function') await as.replaceTrack(at);
+}
+
+async function syncTracksToCurrentPc(stream, operationGeneration) {
+  let targetPc = pc;
+  if (!targetPc) return true;
+  for (let attempt = 0; targetPc && attempt < MAX_SWAP_PC_SYNCS; attempt += 1) {
+    await swapTracks(stream, targetPc);
+    if (!captureIsCurrent(operationGeneration)) return false;
+    if (pc === targetPc) return true;
+    targetPc = pc;
+  }
+  return !targetPc || pc === targetPc;
+}
+
+async function getCam(constraints, operationGeneration = ++captureGeneration) {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function')
+    throw new Error('camera API unavailable in this browser');
+  const request = constraints || {
     video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 60 } },
     audio: true,
-  });
-  const vt = vtrack();
-  if (vt) vt.contentHint = 'motion';
-  $('preview').srcObject = localStream;
-}
-
-// --- report this camera's real capabilities + lens list to the PC, so it shows only working controls
-async function reportCaps() {
-  if (!ws || ws.readyState !== ws.OPEN) return;
-  const vt = vtrack();
-  const c = (vt && vt.getCapabilities) ? vt.getCapabilities() : {};
-  let devices = [];
+  };
+  // Acquire first. If a camera switch is rejected, the existing stream remains live.
+  const next = await navigator.mediaDevices.getUserMedia(request);
+  // Permission UI and camera startup are asynchronous. Stop every track from
+  // an operation that became obsolete while awaiting them.
+  inFlightStreams.add(next);
   try {
-    devices = (await navigator.mediaDevices.enumerateDevices())
-      .filter((d) => d.kind === 'videoinput')
-      .map((d, i) => ({ deviceId: d.deviceId, label: d.label || ('camera ' + (i + 1)) }));
-  } catch (e) {}
-  ws.send(JSON.stringify({
-    type: 'caps',
-    caps: { zoom: c.zoom || null, torch: !!c.torch, focusMode: c.focusMode || null },
-    devices,
-  }));
-}
-
-// --- apply a control command coming from the PC viewer
-async function applyControl(m) {
-  const vt = vtrack();
-  try {
-    if (m.action === 'quality' && vt) {
-      await vt.applyConstraints({ width: { ideal: m.w }, height: { ideal: m.h }, frameRate: { ideal: m.fps } });
-      log('quality -> ' + m.h + 'p' + m.fps);
-    } else if (m.action === 'bitrate' && pc) {
-      const s = pc.getSenders().find((x) => x.track && x.track.kind === 'video');
-      if (s) { const p = s.getParameters(); if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-        p.encodings[0].maxBitrate = m.bps; await s.setParameters(p); log('bitrate -> ' + Math.round(m.bps / 1e6) + ' Mbps'); }
-    } else if (m.action === 'zoom' && vt) {
-      await vt.applyConstraints({ advanced: [{ zoom: m.value }] });
-    } else if (m.action === 'torch' && vt) {
-      await vt.applyConstraints({ advanced: [{ torch: !!m.value }] });
-    } else if (m.action === 'focusMode' && vt) {
-      await vt.applyConstraints({ advanced: [{ focusMode: m.value }] });
-    } else if (m.action === 'device') {
-      await getCam({ video: { deviceId: { exact: m.deviceId }, frameRate: { ideal: 30, max: 60 } }, audio: true });
-      await swapTracks();
-      await reportCaps();
+    if (!captureIsCurrent(operationGeneration)) {
+      stopTracks(next);
+      return null;
     }
-  } catch (e) { log('control "' + m.action + '" failed: ' + e.message); }
+    const previous = localStream;
+    try {
+      if (!await syncTracksToCurrentPc(next, operationGeneration)) {
+        stopTracks(next);
+        return null;
+      }
+    } catch (e) {
+      stopTracks(next);
+      throw e;
+    }
+    localStream = next;
+    $('preview').srcObject = next;
+    bindTrackLifecycle(next);
+    stopTracks(previous);
+    const track = vtrack(next);
+    if (track) {
+      try { track.contentHint = 'motion'; } catch (e) {}
+    }
+    return next;
+  } finally {
+    inFlightStreams.delete(next);
+  }
 }
 
-async function swapTracks() {
-  if (!pc) return;
-  const vt = vtrack(), vs = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
-  if (vs && vt) await vs.replaceTrack(vt);
-  const at = localStream.getAudioTracks()[0], as = pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
-  if (as && at) await as.replaceTrack(at);
+function stopLocalStream() {
+  const stream = localStream;
+  localStream = null;
+  const preview = $('preview');
+  preview.srcObject = null;
+  try { preview.pause(); preview.removeAttribute('src'); preview.load(); } catch (e) {}
+  stopTracks(stream);
 }
 
-function preferH264() {
-  const tr = pc.getTransceivers().find((t) => t.sender && t.sender.track && t.sender.track.kind === 'video');
-  if (!tr || !tr.setCodecPreferences || !window.RTCRtpSender || !RTCRtpSender.getCapabilities) return;
+function closePeerConnection({ clearCandidates = true } = {}) {
+  const old = pc;
+  pc = null;
+  remoteDescriptionReady = false;
+  iceAddChain = Promise.resolve();
+  if (clearCandidates) pendingIce = [];
+  if (old) { try { old.close(); } catch (e) {} }
+}
+
+function queueRemoteIce(current, candidate) {
+  iceAddChain = iceAddChain.then(async () => {
+    if (pc !== current || !remoteDescriptionReady) return;
+    try { await current.addIceCandidate(candidate); } catch (e) { /* stale/unsupported candidate */ }
+  });
+  return iceAddChain;
+}
+
+function receiveRemoteIce(candidate) {
+  if (!candidate) return Promise.resolve();
+  const current = pc;
+  if (!current || !remoteDescriptionReady) {
+    if (pendingIce.length < MAX_PENDING_ICE) pendingIce.push(candidate);
+    return Promise.resolve();
+  }
+  return queueRemoteIce(current, candidate);
+}
+
+async function setRemoteDescriptionAndFlush(current, description) {
+  if (!current || current !== pc) return false;
+  try { await current.setRemoteDescription(description); } catch (e) {
+    if (current === pc) log('remote description failed: ' + (e.message || 'unsupported SDP'));
+    return false;
+  }
+  if (current !== pc) return false;
+  remoteDescriptionReady = true;
+  const queued = pendingIce;
+  pendingIce = [];
+  for (const candidate of queued) await queueRemoteIce(current, candidate);
+  return true;
+}
+
+function preferH264(current = pc) {
+  if (!current || typeof current.getTransceivers !== 'function' || !window.RTCRtpSender || !RTCRtpSender.getCapabilities) return;
+  const transceiver = current.getTransceivers().find((t) => t.sender && t.sender.track && t.sender.track.kind === 'video');
+  if (!transceiver || typeof transceiver.setCodecPreferences !== 'function') return;
   try {
-    const caps = RTCRtpSender.getCapabilities('video'); if (!caps) return;
-    const h = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
+    const caps = RTCRtpSender.getCapabilities('video');
+    if (!caps || !caps.codecs) return;
+    const h264 = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
     const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
-    if (h.length) tr.setCodecPreferences([...h, ...rest]);
+    if (h264.length) transceiver.setCodecPreferences([...h264, ...rest]);
   } catch (e) {}
 }
 
-async function tuneSender() {
-  const s = pc.getSenders().find((x) => x.track && x.track.kind === 'video');
-  if (!s) return;
+async function tuneSender(current = pc) {
+  if (!current || typeof current.getSenders !== 'function') return;
+  const sender = current.getSenders().find((s) => s.track && s.track.kind === 'video');
+  if (!sender || typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') return;
   try {
-    const p = s.getParameters(); if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-    p.encodings[0].maxBitrate = 6_000_000; p.encodings[0].networkPriority = 'high'; p.encodings[0].priority = 'high';
-    p.degradationPreference = 'maintain-framerate';
-    await s.setParameters(p);
+    const parameters = sender.getParameters() || {};
+    if (!parameters.encodings || !parameters.encodings.length) parameters.encodings = [{}];
+    // This is a ceiling, not a promise of delivered bitrate. The viewer shows
+    // measured receive stats, and the control remains manually adjustable.
+    parameters.encodings[0].maxBitrate = 6_000_000;
+    if ('networkPriority' in parameters.encodings[0]) parameters.encodings[0].networkPriority = 'high';
+    if ('priority' in parameters.encodings[0]) parameters.encodings[0].priority = 'high';
+    if ('degradationPreference' in parameters) parameters.degradationPreference = 'maintain-framerate';
+    await sender.setParameters(parameters);
   } catch (e) {}
 }
 
 function newPC() {
-  if (pc) { try { pc.close(); } catch (e) {} }
-  pc = new RTCPeerConnection(RTC_CFG);
-  localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-  preferH264();
-  pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
-  pc.onconnectionstatechange = () => log('peer: ' + pc.connectionState);
+  // Keep any candidates that arrived just before the new offer/answer; clear
+  // them on an explicit peer/signaling teardown instead.
+  closePeerConnection({ clearCandidates: false });
+  remoteDescriptionReady = false;
+  iceAddChain = Promise.resolve();
+  const current = new RTCPeerConnection(RTC_CFG);
+  pc = current;
+  if (localStream && typeof current.addTrack === 'function')
+    for (const track of localStream.getTracks()) current.addTrack(track, localStream);
+  preferH264(current);
+  current.onicecandidate = (event) => {
+    if (event.candidate) sendSignal({ type: 'ice', candidate: event.candidate }, ws, current);
+  };
+  current.onconnectionstatechange = () => {
+    if (pc === current && current.connectionState) log('peer: ' + current.connectionState);
+  };
+  return current;
 }
 
 async function makeOffer() {
-  if (!localStream) return;
-  newPC();
-  await tuneSender();
-  await pc.setLocalDescription(await pc.createOffer());
-  ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
-  log('offer sent — connecting to PC…');
-  reportCaps();
+  if (!started || userStopped || !localStream || !isSocketOpen(ws)) return;
+  const offerToken = ++offerGeneration;
+  if (typeof RTCPeerConnection !== 'function') {
+    log('WebRTC unavailable in this browser');
+    return;
+  }
+  let current;
+  try { current = newPC(); } catch (e) {
+    log('WebRTC setup failed: ' + (e.message || 'unsupported'));
+    return;
+  }
+  await tuneSender(current);
+  if (pc !== current || !started || userStopped || offerToken !== offerGeneration) return;
+  try {
+    await current.setLocalDescription(await current.createOffer());
+    if (pc !== current || !started || userStopped || offerToken !== offerGeneration) return;
+    sendSignal({ type: 'offer', sdp: current.localDescription }, ws, current);
+    log('offer sent — connecting to PC…');
+    await reportCaps(captureGeneration);
+  } catch (e) { if (pc === current) log('offer failed: ' + (e.message || 'unsupported WebRTC')); }
+}
+
+async function reportCaps(operationGeneration = captureGeneration) {
+  if (!captureIsCurrent(operationGeneration) || !isSocketOpen(ws)) return;
+  const vt = vtrack();
+  let capabilities = {};
+  try { capabilities = vt && typeof vt.getCapabilities === 'function' ? (vt.getCapabilities() || {}) : {}; } catch (e) {}
+  let devices = [];
+  try {
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
+      devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter((device) => device.kind === 'videoinput')
+        .map((device, index) => ({ deviceId: device.deviceId || '', label: device.label || ('camera ' + (index + 1)) }));
+    }
+  } catch (e) {}
+  if (!captureIsCurrent(operationGeneration) || !isSocketOpen(ws)) return;
+  sendSignal({
+    type: 'caps',
+    caps: {
+      zoom: capabilities.zoom || null,
+      torch: !!capabilities.torch,
+      focusMode: capabilities.focusMode || null,
+      settings: readSettings(vt),
+    },
+    devices,
+  });
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+async function applyControl(message) {
+  const vt = vtrack();
+  let operationGeneration = captureGeneration;
+  let operationSession = captureSession;
+  let operationRequestId = 0;
+  try {
+    if (message.action === 'quality' && vt && typeof vt.applyConstraints === 'function') {
+      const width = numberOrNull(message.w), height = numberOrNull(message.h), fps = numberOrNull(message.fps);
+      if (!width || !height || !fps) throw new Error('invalid quality request');
+      await vt.applyConstraints({ width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: fps } });
+      if (!captureIsCurrent(operationGeneration)) return;
+      await reportCaps(operationGeneration);
+      log('requested ' + height + 'p @ ' + fps + ' fps; ' + settingsText(readSettings(vt)));
+    } else if (message.action === 'bitrate' && pc && typeof pc.getSenders === 'function') {
+      const bps = numberOrNull(message.bps);
+      if (!bps || bps < 100000 || bps > 50000000) throw new Error('invalid bitrate request');
+      const sender = pc.getSenders().find((item) => item.track && item.track.kind === 'video');
+      if (!sender || typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') throw new Error('bitrate control unavailable');
+      const parameters = sender.getParameters() || {};
+      if (!parameters.encodings || !parameters.encodings.length) parameters.encodings = [{}];
+      parameters.encodings[0].maxBitrate = bps;
+      await sender.setParameters(parameters);
+      if (!captureIsCurrent(operationGeneration)) return;
+      log('bitrate ceiling requested: ' + Math.round(bps / 1e6) + ' Mbps');
+    } else if (message.action === 'zoom' && vt && typeof vt.applyConstraints === 'function') {
+      await vt.applyConstraints({ advanced: [{ zoom: numberOrNull(message.value) }] });
+      if (!captureIsCurrent(operationGeneration)) return;
+      await reportCaps(operationGeneration);
+    } else if (message.action === 'torch' && vt && typeof vt.applyConstraints === 'function') {
+      await vt.applyConstraints({ advanced: [{ torch: !!message.value }] });
+      if (!captureIsCurrent(operationGeneration)) return;
+      await reportCaps(operationGeneration);
+    } else if (message.action === 'focusMode' && vt && typeof vt.applyConstraints === 'function') {
+      await vt.applyConstraints({ advanced: [{ focusMode: message.value }] });
+      if (!captureIsCurrent(operationGeneration)) return;
+      await reportCaps(operationGeneration);
+    } else if (message.action === 'device') {
+      if (typeof message.deviceId !== 'string' || !message.deviceId) throw new Error('invalid camera');
+      const request = queueCameraOperation({ video: { deviceId: { exact: message.deviceId }, frameRate: { ideal: 30, max: 60 } }, audio: true });
+      operationSession = request.session;
+      operationRequestId = request.requestId;
+      const result = await request.promise;
+      if (!result || !result.stream || !captureIsCurrent(result.generation)) return;
+      operationGeneration = result.generation;
+      await reportCaps(operationGeneration);
+    }
+  } catch (e) {
+    if (operationSession !== captureSession || userStopped || (operationRequestId && operationRequestId !== cameraRequestSequence)) return;
+    log('control "' + message.action + '" failed: ' + (e.message || 'unsupported'));
+  }
 }
 
 function connectWS() {
-  ws = new WebSocket('wss://' + location.host);
-  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'phone' })); log('connected — waiting for the PC viewer…'); };
-  ws.onclose = () => log('signaling closed');
-  ws.onerror = () => log('signaling error — is the CA trusted on this iPhone?');
-  ws.onmessage = async (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === 'peer-ready')       await makeOffer();
-    else if (msg.type === 'answer')      await pc.setRemoteDescription(msg.sdp);
-    else if (msg.type === 'ice' && msg.candidate) { try { await pc.addIceCandidate(msg.candidate); } catch (e) {} }
-    else if (msg.type === 'control')     await applyControl(msg);
-    else if (msg.type === 'peer-left')   log('PC viewer disconnected');
+  if (userStopped || !started) return;
+  if (isSocketOpen(ws)) return;
+  let socket;
+  try { socket = new WebSocket('wss://' + location.host); } catch (e) {
+    log('signaling unavailable');
+    scheduleReconnect('signaling error');
+    return;
+  }
+  ws = socket;
+  socket.onopen = () => {
+    if (ws !== socket || userStopped) return;
+    reconnectAttempts = 0;
+    sendSignal({ type: 'join', role: 'phone' }, socket);
+    log('connected — waiting for the PC viewer…');
+  };
+  socket.onerror = () => { if (ws === socket) log('signaling error — is the CA trusted on this iPhone?'); };
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    ws = null;
+    closePeerConnection();
+    if (!userStopped) scheduleReconnect('signaling closed');
+    else log('stopped — camera and microphone released');
+  };
+  socket.onmessage = async (event) => {
+    if (ws !== socket || userStopped) return;
+    let message;
+    try { message = JSON.parse(event.data); } catch (e) { return; }
+    if (message.type === 'peer-ready') {
+      await makeOffer();
+    } else if (message.type === 'answer') {
+      await setRemoteDescriptionAndFlush(pc, message.sdp);
+    } else if (message.type === 'ice' && message.candidate) {
+      await receiveRemoteIce(message.candidate);
+    } else if (message.type === 'control') {
+      await applyControl(message);
+    } else if (message.type === 'replaced') {
+      stopStreaming('this phone session was replaced — camera released; tap Start streaming to retry');
+    } else if (message.type === 'peer-left') {
+      closePeerConnection();
+      log('PC viewer disconnected — waiting for another viewer…');
+    }
   };
 }
 
-$('start').onclick = async () => {
-  if (started) return;
-  try { await getCam(); connectWS(); started = true; $('start').textContent = 'Streaming'; $('start').disabled = true; }
-  catch (e) { log('camera error: ' + e.message); }
+async function startStreaming() {
+  if (started || starting) return;
+  starting = true;
+  userStopped = false;
+  const request = queueCameraOperation();
+  log('requesting camera and microphone permission…');
+  try {
+    const result = await request.promise;
+    if (!result || !result.stream || !captureIsCurrent(result.generation)) return;
+    started = true;
+    $('start').textContent = 'Streaming';
+    $('start').disabled = true;
+    $('stop').disabled = false;
+    $('flip').disabled = false;
+    connectWS();
+  } catch (e) {
+    if (request.session !== captureSession || userStopped || request.requestId !== cameraRequestSequence) return;
+    userStopped = true;
+    started = false;
+    log('camera error: ' + (e.message || 'permission denied'));
+  } finally {
+    if (request.session === captureSession) starting = false;
+  }
+}
+
+function stopStreaming(reason = 'stopped — camera and microphone released') {
+  // Set the privacy flag before closing the socket: its synchronous close event
+  // must not schedule a reconnect or reacquire a camera.
+  userStopped = true;
+  started = false;
+  starting = false;
+  captureSession += 1;
+  cameraRequestSequence += 1;
+  captureGeneration += 1;
+  offerGeneration += 1;
+  clearReconnect();
+  reconnectAttempts = 0;
+  const socket = ws;
+  ws = null;
+  if (socket) { try { socket.close(); } catch (e) {} }
+  closePeerConnection();
+  stopInFlightStreams();
+  stopLocalStream();
+  $('start').textContent = 'Start streaming';
+  $('start').disabled = false;
+  $('stop').disabled = true;
+  $('flip').disabled = true;
+  log(reason);
+}
+
+$('start').onclick = startStreaming;
+$('stop').onclick = () => stopStreaming();
+$('flip').onclick = async () => {
+  if (!started || !localStream) return;
+  const previousFacing = facing;
+  const nextFacing = facing === 'environment' ? 'user' : 'environment';
+  facing = nextFacing;
+  const request = queueCameraOperation({
+    video: { facingMode: nextFacing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 60 } },
+    audio: true,
+  });
+  try {
+    const result = await request.promise;
+    if (!result || !result.stream || !captureIsCurrent(result.generation)) {
+      if (request.session === captureSession && request.requestId === cameraRequestSequence) facing = previousFacing;
+      return;
+    }
+    await reportCaps(result.generation);
+    if (!captureIsCurrent(result.generation) || request.requestId !== cameraRequestSequence) return;
+    log('camera: ' + (nextFacing === 'environment' ? 'back' : 'front') + '; ' + settingsText(readSettings()));
+  } catch (e) {
+    if (request.session !== captureSession || userStopped || request.requestId !== cameraRequestSequence) return;
+    facing = previousFacing;
+    log('flip error: ' + (e.message || 'camera unavailable'));
+  }
 };
 
-$('flip').onclick = async () => {
-  facing = facing === 'environment' ? 'user' : 'environment';
-  try { await getCam(); await swapTracks(); await reportCaps(); log('camera: ' + (facing === 'environment' ? 'back' : 'front')); }
-  catch (e) { log('flip error: ' + e.message); }
-};
+if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    // Device changes are reported, never silently switched. The user chooses
+    // a new lens from the viewer or taps Flip camera.
+    if (started) reportCaps(captureGeneration);
+  });
+}
 </script>
 </body>
 </html>

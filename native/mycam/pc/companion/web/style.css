@@ -1,0 +1,139 @@
+/* MyCam web camera: Windows XP "Luna Blue", after design/STYLE.md and the Android app's Now tab.
+   iOS has no Tahoma, so body text uses Verdana and captions Trebuchet MS (both ship with iOS). */
+
+:root {
+  --title-a: #3D8AF7; --title-b: #0A5DEB; --title-c: #0053E1; --title-d: #0047D0; --title-edge: #0831D9;
+  --surface: #ECE9D8;
+  --pane-a: #7BA2E7; --pane-b: #6375D6;
+  --head-a: #FFFFFF; --head-b: #C6D3F7; --head-text: #215DC6;
+  --hero-a: #0055E5; --hero-b: #2463D6;
+  --paused-a: #B05F00; --paused-b: #8F4C00;
+  --body: #D6DFF7;
+  --text: #000000; --subtle: #4D4D4D; --disabled: #8A877A;
+  --go-gloss: #5DBE5D; --go-a: #2B842B; --go-b: #226B22; --go-edge: #1D5E1D;
+  --check: #21A121; --radio-edge: #1C5180;
+  --btn-a: #FFFFFF; --btn-b: #ECEBE6; --btn-c: #D6D0C5; --btn-edge: #003C74;
+  --ring-a: #FFCF6B; --ring-b: #E5A01A;
+  --chunk-a: #E2F8E2; --chunk-b: #6FD86F; --chunk-c: #2DB52D; --chunk-d: #5ACD5A; --track-edge: #ACA899;
+  color-scheme: light; /* Luna Blue only: no dark mode. */
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  font: 16px/1.4 Verdana, -apple-system, system-ui, sans-serif;
+  color: var(--text);
+  background: linear-gradient(180deg, var(--pane-a), var(--pane-b)) fixed;
+  -webkit-text-size-adjust: 100%;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.titlebar {
+  display: flex; align-items: center; gap: 12px;
+  padding: calc(env(safe-area-inset-top) + 12px) 16px 12px;
+  background: linear-gradient(180deg, #7FB6FF 0, var(--title-a) 6%, var(--title-b) 40%, var(--title-c) 85%, var(--title-d) 100%);
+  border-bottom: 1px solid var(--title-edge);
+}
+.titlebar .logo { width: 36px; height: 36px; }
+.titlebar .title {
+  font: bold 24px "Trebuchet MS", Verdana, sans-serif;
+  color: #fff; text-shadow: 1px 1px 0 #0A1E78;
+}
+
+main { padding: 16px; max-width: 560px; margin: 0 auto; }
+
+/* Task groups. */
+.group { margin: 0 0 16px; border-radius: 4px 4px 0 0; overflow: hidden; }
+.group-title {
+  margin: 0; padding: 12px 16px;
+  font: bold 17px "Trebuchet MS", Verdana, sans-serif;
+  color: var(--head-text);
+  background: linear-gradient(90deg, var(--head-a), var(--head-b));
+}
+.group-body { background: var(--body); border: 1px solid #fff; border-top: 0; padding: 16px; }
+
+.hero .group-title {
+  color: #fff; font-size: 22px; padding: 14px 16px;
+  background: linear-gradient(90deg, var(--hero-a), var(--hero-b));
+}
+.hero.paused .group-title { background: linear-gradient(90deg, var(--paused-a), var(--paused-b)); }
+.hero .group-body { background: #fff; text-align: center; }
+
+.sentence { margin: 0 0 12px; color: var(--subtle); }
+.facts { margin: 0 0 12px; font-weight: bold; }
+.note { margin: 12px 0 0; color: var(--subtle); font-size: 14px; }
+.tips { margin: 0 0 12px; padding-left: 20px; color: var(--subtle); font-size: 15px; }
+.tips li { margin-bottom: 6px; }
+
+/* XP push buttons. */
+.button {
+  -webkit-appearance: none; appearance: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 12px;
+  min-height: 48px; padding: 8px 18px;
+  font: bold 16px Verdana, sans-serif; color: var(--text);
+  background: linear-gradient(180deg, var(--btn-a), var(--btn-b) 85%, var(--btn-c));
+  border: 1px solid var(--btn-edge); border-radius: 3px;
+  touch-action: manipulation; cursor: pointer;
+}
+.button:active { box-shadow: inset 0 0 0 2px var(--ring-b); background: linear-gradient(180deg, var(--btn-c), var(--btn-b)); }
+.button:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--ring-a), 0 0 0 1px var(--ring-b); }
+
+.hero-button { display: flex; width: 100%; text-align: left; justify-content: flex-start; padding: 12px 16px; border-width: 2px; }
+.hero-button .label { display: flex; flex-direction: column; }
+.hero-button b { font-size: 18px; }
+.hero-button small { font-weight: normal; color: var(--subtle); font-size: 14px; }
+.hero-button.go {
+  color: #fff; border-color: var(--go-edge);
+  background: linear-gradient(180deg, var(--go-gloss) 0, var(--go-gloss) 12%, var(--go-a) 13%, var(--go-b) 100%);
+}
+.hero-button.go small { color: #E8F6E8; }
+
+/* Round badges: green play, amber pause (graphics only, never behind text). */
+.badge { flex: none; width: 44px; height: 44px; border-radius: 50%; border: 2px solid #fff; position: relative;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .3); }
+.badge.play { background: radial-gradient(circle at 35% 30%, #7BD87B, var(--check)); }
+.badge.play::after { content: ""; position: absolute; left: 16px; top: 11px;
+  border-left: 15px solid #fff; border-top: 9px solid transparent; border-bottom: 9px solid transparent; }
+.badge.pause { background: radial-gradient(circle at 35% 30%, #FFD86A, #E08A00); }
+.badge.pause::before, .badge.pause::after { content: ""; position: absolute; top: 11px; width: 6px; height: 18px; background: #fff; border-radius: 1px; }
+.badge.pause::before { left: 12px; }
+.badge.pause::after { right: 12px; }
+.paused .badge.pause { background: radial-gradient(circle at 35% 30%, #7BD87B, var(--check)); }
+.paused .badge.pause::before { display: none; }
+.paused .badge.pause::after { right: auto; left: 16px; top: 11px; width: 0; height: 0; border-radius: 0; background: none;
+  border-left: 15px solid #fff; border-top: 9px solid transparent; border-bottom: 9px solid transparent; }
+
+/* Radios with the green XP dot. */
+.radios { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.radio { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; font-size: 17px; }
+.radio input { position: absolute; opacity: 0; pointer-events: none; }
+.radio .dot { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--radio-edge);
+  background: radial-gradient(circle at 35% 30%, #fff, #DCDAD0); position: relative; }
+.radio input:checked + .dot::after { content: ""; position: absolute; inset: 6px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #7BD87B, var(--check)); }
+.radio input:focus-visible + .dot { box-shadow: 0 0 0 2px var(--ring-b); }
+.radio input:disabled + .dot { opacity: .5; }
+
+/* The segmented green progress bar (marquee while connecting). */
+.progress { height: 16px; margin: 0 auto 12px; max-width: 260px; border: 1px solid var(--track-edge);
+  border-radius: 3px; background: #fff; overflow: hidden; padding: 2px; }
+.progress .chunks { height: 100%; width: 40%;
+  background: repeating-linear-gradient(90deg,
+    var(--chunk-c) 0, var(--chunk-d) 8px, var(--chunk-c) 8px, transparent 8px, transparent 10px);
+  animation: marquee 1.6s linear infinite; }
+@keyframes marquee { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) {
+  .progress .chunks { animation: none; width: 100%; opacity: .6; }
+}
+
+/* The camera's picture is read, never shown. iOS stops delivering frames for display:none video, so it
+   stays in the page as a tiny, invisible element. */
+#video { position: fixed; left: 0; bottom: 0; width: 2px; height: 2px; opacity: .01; pointer-events: none; }
+
+.dim { position: fixed; inset: 0; background: #000; color: #555; display: flex; align-items: center;
+  justify-content: center; text-align: center; font-size: 18px; z-index: 10; }
+.dim[hidden] { display: none; }
+
+[hidden] { display: none !important; }

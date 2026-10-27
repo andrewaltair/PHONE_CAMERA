@@ -1,0 +1,55 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+/.idea/deploymentTargetSelector.xml
+/.idea/deviceManager.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+/pc/build*/
+
+# Local scratch
+*.log
+
+# Internal project docs (planning notes, test logs, friend-testing details) — not meant to be public.
+# Files already tracked here before this line (e.g. ARCHITECTURE.md) stay tracked; this only stops new
+# ones from being swept in by a broad `git add`.
+/docs/
+
+# Installer build outputs and downloaded third-party packages
+/installer/redist/
+/installer/output/
+
+# Built APKs handed out for testing
+/*.apk
+
+# Local design references (Microsoft artwork, not redistributable) and raw screenshots
+/inspo/
+/screenshots/
+
+# Release files staged for GitHub Releases
+/release/
+
+# Release signing secrets (see tools/create-release-key.ps1). Never commit these.
+/keystore.properties
+*.jks
+*.keystore
+
+# Agent worktrees
+/.claude/worktrees/
+
+# Generated knowledge graph (graphify): rebuilt from the repo, so not worth committing
+/graphify-out/
+
+pc/tools/webtest/cert/
+pc/tools/webtest/results/

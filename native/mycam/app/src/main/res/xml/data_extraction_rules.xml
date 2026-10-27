@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ (API 31). Pairing keys and the phone id (PairedPcs.PREFS) stay on the phone, in a cloud backup
+     and in a phone-to-phone transfer alike: a new phone pairs again. Everything else is copied. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="mycam_pairing.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="mycam_pairing.xml" />
+    </device-transfer>
+</data-extraction-rules>

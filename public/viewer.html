@@ -15,12 +15,13 @@
   .panel { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
     padding: 8px 14px; border-top: 1px solid #161b26; }
   #hud { font: 13px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; color: #7fd1b9; }
+  #actual { flex: 1 1 100%; color: #8b95a7; font: 12px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; }
   .grp { display: flex; gap: 6px; align-items: center; }
   .grp > label { color: #8b95a7; font-size: 12px; }
   button, select { padding: 6px 10px; border: 1px solid #263043; border-radius: 8px;
     background: #121826; color: #cbd5e1; font-size: 13px; cursor: pointer; }
   button.on { background: #2b6cff; border-color: #2b6cff; color: #fff; }
-  #cam { display: none; }                    /* shown once the phone reports capabilities */
+  #cam { display: none; }
   input[type=range] { width: 120px; }
   #status { padding: 6px 14px; font-size: 12px; color: #8b95a7; }
 </style>
@@ -33,17 +34,16 @@
     <video id="remote" autoplay playsinline controls></video>
   </div>
 
-  <!-- camera controls — populated from the phone's real capabilities -->
   <div id="cam" class="panel">
-    <div class="grp"><label>quality</label>
+    <div class="grp"><label>request</label>
       <select id="quality">
-        <option value="640,480,30">480p · 30</option>
-        <option value="1280,720,30" selected>720p · 30</option>
-        <option value="1280,720,60">720p · 60 (smoothest)</option>
-        <option value="1920,1080,30">1080p · 30 (sharpest)</option>
+        <option value="640,480,30">480p @ 30 fps</option>
+        <option value="1280,720,30" selected>720p @ 30 fps</option>
+        <option value="1280,720,60">720p @ 60 fps</option>
+        <option value="1920,1080,30">1080p @ 30 fps</option>
       </select>
     </div>
-    <div class="grp"><label>bitrate</label>
+    <div class="grp"><label>bitrate ceiling</label>
       <select id="bitrate">
         <option value="2000000">2 Mbps</option>
         <option value="6000000" selected>6 Mbps</option>
@@ -55,14 +55,15 @@
     <button id="torch" style="display:none">🔦 torch</button>
   </div>
 
-  <!-- latency panel -->
   <div class="panel">
-    <div id="hud">RTT –  ·  jbuf –  ·  – fps  ·  loss –</div>
+    <div id="hud">RTT – · jbuf – · –×– · – fps · loss –</div>
+    <div id="actual">capture settings – · received measurements –</div>
     <div class="grp" style="margin-left:auto"><label>jitter buffer</label>
       <button data-ms="0">0</button><button data-ms="30">30</button><button data-ms="80">80 ms</button>
     </div>
   </div>
   <div id="status">viewer: idle</div>
+  <button id="retry" style="display:none">Retry connection</button>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -70,97 +71,362 @@ const log  = (t) => { $('status').textContent = 'viewer: ' + t; console.log('[vi
 const hint = (show) => { $('hint').style.display = show ? '' : 'none'; };
 const hud  = (t) => { $('hud').textContent = t; };
 
-const WS = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-let pc, ws;
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+// LAN-only by default. There is no implicit public STUN fallback.
+const LAN_ONLY = true;
+const RTC_CFG = { iceServers: [] };
+const MAX_SIGNAL_RECONNECTS = 6;
+const MAX_PENDING_ICE = 64;
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 8000;
+let pc = null;
+let ws = null;
+let stopped = false;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let pendingIce = [];
+let remoteDescriptionReady = false;
+let iceAddChain = Promise.resolve();
 let JB_MS = 0;
+let lastPlayback = null;
 
-function ctl(o) { if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(Object.assign({ type: 'control' }, o))); }
+function isSocketOpen(socket) { return !!socket && socket.readyState === WebSocket.OPEN; }
 
-function applyJB() {
-  if (!pc) return;
-  for (const r of pc.getReceivers())
-    if (r.track && r.track.kind === 'video') {
-      try { r.jitterBufferTarget = JB_MS; } catch (e) {}
-      try { r.playoutDelayHint = JB_MS / 1000; } catch (e) {}
-    }
+function sendSignal(message, socket = ws, ownerPc = null) {
+  if (ownerPc && ownerPc !== pc) return false;
+  if (!socket || socket !== ws || !isSocketOpen(socket)) return false;
+  try { socket.send(JSON.stringify(message)); return true; } catch (e) { return false; }
 }
 
-// --- camera controls -> relayed to the phone
-$('quality').onchange = (e) => { const [w, h, fps] = e.target.value.split(',').map(Number); ctl({ action: 'quality', w, h, fps }); };
-$('bitrate').onchange = (e) => ctl({ action: 'bitrate', bps: Number(e.target.value) });
-$('lens').onchange    = (e) => ctl({ action: 'device', deviceId: e.target.value });
-$('zoom').oninput     = (e) => ctl({ action: 'zoom', value: Number(e.target.value) });
-let torchOn = false;
-$('torch').onclick    = () => { torchOn = !torchOn; $('torch').classList.toggle('on', torchOn); ctl({ action: 'torch', value: torchOn }); };
+function clearReconnect() {
+  if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
 
-// build/refresh the control panel from the phone's reported capabilities
+function scheduleReconnect(reason) {
+  if (stopped || reconnectTimer !== null) return;
+  if (reconnectAttempts >= MAX_SIGNAL_RECONNECTS) {
+    log('signaling unavailable — reload to retry');
+    return;
+  }
+  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * (2 ** reconnectAttempts));
+  reconnectAttempts += 1;
+  log(reason + ' — retry ' + reconnectAttempts + '/' + MAX_SIGNAL_RECONNECTS);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!stopped) connectWS();
+  }, delay);
+}
+
+function clearRemoteFrame() {
+  const video = $('remote');
+  try { video.pause(); } catch (e) {}
+  video.srcObject = null;
+  try { video.removeAttribute('src'); video.load(); } catch (e) {}
+  lastPlayback = null;
+}
+
+function closePeerConnection({ clearCandidates = true, clearFrame = true } = {}) {
+  const old = pc;
+  pc = null;
+  remoteDescriptionReady = false;
+  iceAddChain = Promise.resolve();
+  if (clearCandidates) pendingIce = [];
+  if (clearFrame) clearRemoteFrame();
+  if (old) { try { old.close(); } catch (e) {} }
+}
+
+function queueRemoteIce(current, candidate) {
+  iceAddChain = iceAddChain.then(async () => {
+    if (pc !== current || !remoteDescriptionReady) return;
+    try { await current.addIceCandidate(candidate); } catch (e) { /* stale/unsupported candidate */ }
+  });
+  return iceAddChain;
+}
+
+function receiveRemoteIce(candidate) {
+  if (!candidate) return Promise.resolve();
+  const current = pc;
+  if (!current || !remoteDescriptionReady) {
+    if (pendingIce.length < MAX_PENDING_ICE) pendingIce.push(candidate);
+    return Promise.resolve();
+  }
+  return queueRemoteIce(current, candidate);
+}
+
+async function setRemoteDescriptionAndFlush(current, description) {
+  if (!current || current !== pc) return false;
+  try { await current.setRemoteDescription(description); } catch (e) {
+    if (pc === current) log('remote description failed: ' + (e.message || 'unsupported SDP'));
+    return false;
+  }
+  if (pc !== current) return false;
+  remoteDescriptionReady = true;
+  const queued = pendingIce;
+  pendingIce = [];
+  for (const candidate of queued) await queueRemoteIce(current, candidate);
+  return true;
+}
+
+function applyJB() {
+  if (!pc || typeof pc.getReceivers !== 'function') return;
+  for (const receiver of pc.getReceivers()) {
+    if (receiver.track && receiver.track.kind === 'video') {
+      try { receiver.jitterBufferTarget = JB_MS; } catch (e) {}
+      try { receiver.playoutDelayHint = JB_MS / 1000; } catch (e) {}
+    }
+  }
+}
+
+function ctl(command) { sendSignal(Object.assign({ type: 'control' }, command)); }
+
+function captureText(settings) {
+  if (!settings) return 'capture settings unavailable';
+  const size = settings.width && settings.height ? settings.width + '×' + settings.height : 'size unavailable';
+  const fps = settings.frameRate ? ' @ ' + Math.round(settings.frameRate) + ' fps' : '';
+  return 'capture ' + size + fps;
+}
+
+function renderActual(settings, received) {
+  const capture = captureText(settings);
+  const size = received.width && received.height ? received.width + '×' + received.height : 'size unavailable';
+  const fps = received.fps == null ? 'fps unavailable' : Math.round(received.fps) + ' fps';
+  $('actual').textContent = capture + ' · received ' + size + ' @ ' + fps;
+}
+
+function resetCaps() {
+  $('cam').style.display = 'none';
+  $('lensWrap').style.display = 'none';
+  $('zoomWrap').style.display = 'none';
+  $('torch').style.display = 'none';
+  $('actual').textContent = 'capture settings – · received measurements –';
+  const select = $('lens');
+  while (select.firstChild) select.removeChild(select.firstChild);
+}
+
 function applyCaps(caps, devices) {
   $('cam').style.display = 'flex';
+  if (caps && caps.settings) renderActual(caps.settings, { width: null, height: null, fps: null });
+  else $('actual').textContent = 'capture settings unavailable · received measurements –';
+  const select = $('lens');
+  while (select.firstChild) select.removeChild(select.firstChild);
   if (devices && devices.length > 1) {
     $('lensWrap').style.display = '';
-    $('lens').innerHTML = devices.map((d) => `<option value="${d.deviceId}">${d.label}</option>`).join('');
+    for (const device of devices) {
+      const option = document.createElement('option');
+      option.value = String(device.deviceId || '');
+      // Device labels are browser-provided but still treated as untrusted text.
+      option.textContent = String(device.label || 'camera');
+      select.appendChild(option);
+    }
   } else $('lensWrap').style.display = 'none';
-  if (caps && caps.zoom && caps.zoom.max) {
+  if (caps && caps.zoom && caps.zoom.max != null) {
     $('zoomWrap').style.display = '';
-    const z = caps.zoom; $('zoom').min = z.min; $('zoom').max = z.max; $('zoom').step = z.step || 0.1;
-    if (!$('zoom').value) $('zoom').value = z.min;
+    const zoom = caps.zoom;
+    $('zoom').min = zoom.min != null ? zoom.min : 1;
+    $('zoom').max = zoom.max;
+    $('zoom').step = zoom.step || 0.1;
+    if (!$('zoom').value) $('zoom').value = $('zoom').min;
   } else $('zoomWrap').style.display = 'none';
   $('torch').style.display = (caps && caps.torch) ? '' : 'none';
 }
 
-// JB buttons
-for (const b of document.querySelectorAll('[data-ms]')) {
-  b.onclick = () => { JB_MS = Number(b.dataset.ms); document.querySelectorAll('[data-ms]').forEach((x) => x.classList.toggle('on', x === b)); applyJB(); log('jitter buffer = ' + JB_MS + ' ms'); };
-  if (Number(b.dataset.ms) === JB_MS) b.classList.add('on');
+// Camera controls are requests; the phone returns getSettings() separately.
+$('quality').onchange = (event) => {
+  const [width, height, fps] = event.target.value.split(',').map(Number);
+  ctl({ action: 'quality', w: width, h: height, fps });
+};
+$('bitrate').onchange = (event) => ctl({ action: 'bitrate', bps: Number(event.target.value) });
+$('lens').onchange = (event) => ctl({ action: 'device', deviceId: event.target.value });
+$('zoom').oninput = (event) => ctl({ action: 'zoom', value: Number(event.target.value) });
+let torchOn = false;
+$('torch').onclick = () => {
+  torchOn = !torchOn;
+  $('torch').classList.toggle('on', torchOn);
+  ctl({ action: 'torch', value: torchOn });
+};
+
+for (const button of document.querySelectorAll('[data-ms]')) {
+  button.onclick = () => {
+    JB_MS = Number(button.dataset.ms);
+    document.querySelectorAll('[data-ms]').forEach((item) => item.classList.toggle('on', item === button));
+    applyJB();
+    log('jitter buffer = ' + JB_MS + ' ms');
+  };
+  if (Number(button.dataset.ms) === JB_MS) button.classList.add('on');
 }
 
-const f = (n) => (n == null || isNaN(n) ? '–' : Math.round(n));
+const f = (number) => (number == null || isNaN(number) ? '–' : Math.round(number));
 async function pollStats() {
-  if (!pc) return;
-  let rtt, jbuf, fps, loss;
-  (await pc.getStats()).forEach((r) => {
-    if (r.type === 'inbound-rtp' && r.kind === 'video') {
-      if (r.jitterBufferDelay != null && r.jitterBufferEmittedCount) jbuf = (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000;
-      fps = r.framesPerSecond; loss = r.packetsLost;
+  const current = pc;
+  if (!current || typeof current.getStats !== 'function') return;
+  let rtt, jbuf, fps, loss, width, height;
+  try {
+    const stats = await current.getStats();
+    if (pc !== current) return;
+    stats.forEach((report) => {
+      const isVideoInbound = report.type === 'inbound-rtp' && (report.kind === 'video' || report.mediaType === 'video');
+      if (isVideoInbound) {
+        if (report.jitterBufferDelay != null && report.jitterBufferEmittedCount) jbuf = (report.jitterBufferDelay / report.jitterBufferEmittedCount) * 1000;
+        if (report.framesPerSecond != null) fps = report.framesPerSecond;
+        if (report.frameWidth != null) width = report.frameWidth;
+        if (report.frameHeight != null) height = report.frameHeight;
+        if (report.packetsLost != null) loss = report.packetsLost;
+      }
+      if (report.type === 'candidate-pair' && report.nominated && report.currentRoundTripTime != null)
+        rtt = report.currentRoundTripTime * 1000;
+    });
+  } catch (e) { return; }
+  const video = $('remote');
+  if (width == null && video.videoWidth) width = video.videoWidth;
+  if (height == null && video.videoHeight) height = video.videoHeight;
+  // getVideoPlaybackQuality is optional. When available, derive measured
+  // rendered fps from frame deltas rather than claiming a target value.
+  try {
+    const quality = typeof video.getVideoPlaybackQuality === 'function' ? video.getVideoPlaybackQuality() : null;
+    if (quality && quality.totalVideoFrames != null) {
+      const now = Date.now();
+      if (lastPlayback && now > lastPlayback.time) fps = ((quality.totalVideoFrames - lastPlayback.frames) * 1000) / (now - lastPlayback.time);
+      lastPlayback = { frames: quality.totalVideoFrames, time: now };
     }
-    if (r.type === 'candidate-pair' && r.nominated && r.currentRoundTripTime != null) rtt = r.currentRoundTripTime * 1000;
-  });
-  hud(`RTT ${f(rtt)} ms  ·  jbuf ${f(jbuf)} ms  ·  ${f(fps)} fps  ·  loss ${loss ?? '–'}  ·  target ${JB_MS} ms`);
+  } catch (e) {}
+  const actual = $('actual').textContent;
+  const capture = actual.split(' · received ')[0] || 'capture settings unavailable';
+  renderActual(null, { width, height, fps });
+  $('actual').textContent = capture + ' · received ' + (width && height ? width + '×' + height : 'size unavailable') + ' @ ' + (fps == null ? 'fps unavailable' : Math.round(fps) + ' fps');
+  hud('RTT ' + f(rtt) + ' ms · jbuf ' + f(jbuf) + ' ms · ' + (width && height ? width + '×' + height : '–×–') + ' · ' + f(fps) + ' fps · loss ' + (loss ?? '–') + ' · target ' + JB_MS + ' ms');
 }
 setInterval(pollStats, 1000);
 
 function newPC() {
-  if (pc) { try { pc.close(); } catch (e) {} }
-  pc = new RTCPeerConnection(RTC_CFG);
-  pc.ontrack = (e) => { $('remote').srcObject = e.streams[0]; hint(false); applyJB(); $('remote').play().catch(() => log('live — click the video for audio')); log('live'); };
-  pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
-  pc.onconnectionstatechange = () => log(pc.connectionState);
+  // Preserve candidates received just before the offer, but clear the old PC
+  // and frame so a reconnect cannot display stale video.
+  closePeerConnection({ clearCandidates: false, clearFrame: true });
+  remoteDescriptionReady = false;
+  iceAddChain = Promise.resolve();
+  const current = new RTCPeerConnection(RTC_CFG);
+  pc = current;
+  current.ontrack = (event) => {
+    if (pc !== current) return;
+    let stream = event.streams && event.streams[0];
+    if (!stream && typeof MediaStream === 'function' && event.track) {
+      stream = new MediaStream();
+      stream.addTrack(event.track);
+    }
+    if (!stream) return;
+    $('remote').srcObject = stream;
+    hint(false);
+    applyJB();
+    $('remote').play().catch(() => log('live — click the video for audio'));
+    log('live');
+  };
+  current.onicecandidate = (event) => {
+    if (event.candidate) sendSignal({ type: 'ice', candidate: event.candidate }, ws, current);
+  };
+  current.onconnectionstatechange = () => {
+    if (pc === current && current.connectionState) log(current.connectionState);
+  };
+  return current;
+}
+
+async function handleOffer(message, socket) {
+  if (typeof RTCPeerConnection !== 'function') {
+    log('WebRTC unavailable in this browser');
+    return;
+  }
+  let current;
+  try { current = newPC(); } catch (e) {
+    log('WebRTC setup failed: ' + (e.message || 'unsupported'));
+    return;
+  }
+  if (!await setRemoteDescriptionAndFlush(current, message.sdp)) return;
+  if (pc !== current || stopped) return;
+  try {
+    await current.setLocalDescription(await current.createAnswer());
+    sendSignal({ type: 'answer', sdp: current.localDescription }, socket, current);
+    applyJB();
+    log('answered — connecting…');
+  } catch (e) { if (pc === current) log('answer failed: ' + (e.message || 'unsupported WebRTC')); }
 }
 
 function connectWS() {
-  ws = new WebSocket(WS);
-  ws.onopen = () => { ws.send(JSON.stringify({ type: 'join', role: 'viewer' })); log('connected — waiting for phone…'); };
-  ws.onclose = () => log('signaling closed — reload to retry');
-  ws.onerror = () => log('signaling error');
-  ws.onmessage = async (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === 'offer') {
-      newPC();
-      await pc.setRemoteDescription(msg.sdp);
-      await pc.setLocalDescription(await pc.createAnswer());
-      applyJB();
-      ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
-      log('answered — connecting…');
-    } else if (msg.type === 'ice' && msg.candidate) {
-      try { await pc.addIceCandidate(msg.candidate); } catch (e) {}
-    } else if (msg.type === 'caps') {
-      applyCaps(msg.caps, msg.devices);
-    } else if (msg.type === 'peer-left') {
-      log('phone disconnected'); hint(true); $('cam').style.display = 'none';
+  if (stopped || isSocketOpen(ws)) return;
+  let socket;
+  try { socket = new WebSocket(WS_URL); } catch (e) {
+    scheduleReconnect('signaling error');
+    return;
+  }
+  ws = socket;
+  socket.onopen = () => {
+    if (ws !== socket || stopped) return;
+    reconnectAttempts = 0;
+    $('retry').style.display = 'none';
+    sendSignal({ type: 'join', role: 'viewer' }, socket);
+    log('connected — waiting for phone…');
+  };
+  socket.onerror = () => { if (ws === socket) log('signaling error'); };
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    ws = null;
+    closePeerConnection();
+    resetCaps();
+    hint(true);
+    if (!stopped) scheduleReconnect('signaling closed');
+  };
+  socket.onmessage = (event) => {
+    if (ws !== socket || stopped) return;
+    let message;
+    try { message = JSON.parse(event.data); } catch (e) { return; }
+    if (message.type === 'replaced') {
+      stopped = true;
+      clearReconnect();
+      reconnectAttempts = 0;
+      const replacedSocket = ws;
+      ws = null;
+      closePeerConnection();
+      resetCaps();
+      hint(true);
+      $('retry').style.display = '';
+      log('this viewer was replaced — click Retry connection or reload');
+      if (replacedSocket) try { replacedSocket.close(); } catch (e) {}
+      return;
     }
+    if (message.type === 'offer') return handleOffer(message, socket);
+    if (message.type === 'ice' && message.candidate) return receiveRemoteIce(message.candidate);
+    if (message.type === 'caps') { applyCaps(message.caps, message.devices); return Promise.resolve(); }
+    if (message.type === 'peer-left') {
+      closePeerConnection();
+      resetCaps();
+      hint(true);
+      log('phone disconnected — waiting…');
+    }
+    return Promise.resolve();
   };
 }
+
+function retryConnection() {
+  if (!stopped) return;
+  stopped = false;
+  reconnectAttempts = 0;
+  clearReconnect();
+  $('retry').style.display = 'none';
+  log('retrying signaling…');
+  connectWS();
+}
+
+$('retry').onclick = retryConnection;
+
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('beforeunload', () => {
+    stopped = true;
+    clearReconnect();
+    const socket = ws;
+    ws = null;
+    if (socket) try { socket.close(); } catch (e) {}
+    closePeerConnection();
+  });
+}
+
 connectWS();
 </script>
 </body>

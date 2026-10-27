@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup up to Android 11 (API 30); 12+ reads data_extraction_rules.xml. Pairing keys and the phone id
+     (PairedPcs.PREFS) stay on the phone: a restored phone pairs again. Everything else is backed up. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="mycam_pairing.xml" />
+</full-backup-content>

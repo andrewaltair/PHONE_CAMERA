@@ -13,45 +13,193 @@
 <video id="v" autoplay playsinline muted></video>
 <script>
 // Muted on purpose: a video SOURCE (OBS / virtual camera) is video-only; route the iPhone mic
-// separately (VB-CABLE) if you need audio. Auto-reconnects so it survives server restarts.
-const WS = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-let pc, ws;
+// separately (VB-CABLE) if you need audio. Reconnects are bounded so a dead server cannot create
+// an endless timer/socket loop. A successful connection resets the outage budget.
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+const LAN_ONLY = true;
+const RTC_CFG = { iceServers: [] };
+const MAX_SIGNAL_RECONNECTS = 6;
+const MAX_PENDING_ICE = 64;
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 8000;
+let pc = null;
+let ws = null;
+let stopped = false;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let pendingIce = [];
+let remoteDescriptionReady = false;
+let iceAddChain = Promise.resolve();
+
+function isSocketOpen(socket) { return !!socket && socket.readyState === WebSocket.OPEN; }
+
+function sendSignal(message, socket = ws, ownerPc = null) {
+  if (ownerPc && ownerPc !== pc) return false;
+  if (!socket || socket !== ws || !isSocketOpen(socket)) return false;
+  try { socket.send(JSON.stringify(message)); return true; } catch (e) { return false; }
+}
+
+function clearReconnect() {
+  if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+
+function scheduleReconnect() {
+  if (stopped || reconnectTimer !== null) return;
+  if (reconnectAttempts >= MAX_SIGNAL_RECONNECTS) return;
+  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * (2 ** reconnectAttempts));
+  reconnectAttempts += 1;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!stopped) connectWS();
+  }, delay);
+}
+
+function clearFrame() {
+  const video = document.getElementById('v');
+  try { video.pause(); } catch (e) {}
+  video.srcObject = null;
+  try { video.removeAttribute('src'); video.load(); } catch (e) {}
+}
+
+function closePeerConnection({ clearCandidates = true, clearVideo = true } = {}) {
+  const old = pc;
+  pc = null;
+  remoteDescriptionReady = false;
+  iceAddChain = Promise.resolve();
+  if (clearCandidates) pendingIce = [];
+  if (clearVideo) clearFrame();
+  if (old) { try { old.close(); } catch (e) {} }
+}
+
+function queueRemoteIce(current, candidate) {
+  iceAddChain = iceAddChain.then(async () => {
+    if (pc !== current || !remoteDescriptionReady) return;
+    try { await current.addIceCandidate(candidate); } catch (e) { /* stale/unsupported candidate */ }
+  });
+  return iceAddChain;
+}
+
+function receiveRemoteIce(candidate) {
+  if (!candidate) return Promise.resolve();
+  const current = pc;
+  if (!current || !remoteDescriptionReady) {
+    if (pendingIce.length < MAX_PENDING_ICE) pendingIce.push(candidate);
+    return Promise.resolve();
+  }
+  return queueRemoteIce(current, candidate);
+}
+
+async function setRemoteDescriptionAndFlush(current, description) {
+  if (!current || current !== pc) return false;
+  try { await current.setRemoteDescription(description); } catch (e) { return false; }
+  if (pc !== current) return false;
+  remoteDescriptionReady = true;
+  const queued = pendingIce;
+  pendingIce = [];
+  for (const candidate of queued) await queueRemoteIce(current, candidate);
+  return true;
+}
 
 function newPC() {
-  if (pc) { try { pc.close(); } catch (e) {} }
-  pc = new RTCPeerConnection(RTC_CFG);
-  pc.ontrack = (e) => {
-    const v = document.getElementById('v');
-    v.srcObject = e.streams[0];
-    v.play().catch(() => {});
-    for (const r of pc.getReceivers()) {
-      if (r.track && r.track.kind === 'video') {
-        try { r.jitterBufferTarget = 0; } catch (e) {}
-        try { r.playoutDelayHint = 0; } catch (e) {}
+  // Candidates received before the offer are retained, while the old PC and
+  // frame are discarded so a new OBS connection cannot flash stale video.
+  closePeerConnection({ clearCandidates: false, clearVideo: true });
+  remoteDescriptionReady = false;
+  iceAddChain = Promise.resolve();
+  const current = new RTCPeerConnection(RTC_CFG);
+  pc = current;
+  current.ontrack = (event) => {
+    if (pc !== current) return;
+    let stream = event.streams && event.streams[0];
+    if (!stream && typeof MediaStream === 'function' && event.track) {
+      stream = new MediaStream();
+      stream.addTrack(event.track);
+    }
+    if (!stream) return;
+    document.getElementById('v').srcObject = stream;
+    document.getElementById('v').play().catch(() => {});
+    if (typeof current.getReceivers === 'function') {
+      for (const receiver of current.getReceivers()) {
+        if (receiver.track && receiver.track.kind === 'video') {
+          try { receiver.jitterBufferTarget = 0; } catch (e) {}
+          try { receiver.playoutDelayHint = 0; } catch (e) {}
+        }
       }
     }
   };
-  pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
+  current.onicecandidate = (event) => {
+    if (event.candidate) sendSignal({ type: 'ice', candidate: event.candidate }, ws, current);
+  };
+  return current;
 }
 
-function connect() {
-  ws = new WebSocket(WS);
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'join', role: 'viewer' }));
-  ws.onclose = () => setTimeout(connect, 1000);   // keep the OBS source alive across restarts
-  ws.onmessage = async (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.type === 'offer') {
-      newPC();
-      await pc.setRemoteDescription(m.sdp);
-      await pc.setLocalDescription(await pc.createAnswer());
-      ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
-    } else if (m.type === 'ice' && m.candidate) {
-      try { await pc.addIceCandidate(m.candidate); } catch (e) {}
+async function handleOffer(message, socket) {
+  if (typeof RTCPeerConnection !== 'function') return;
+  let current;
+  try { current = newPC(); } catch (e) { return; }
+  if (!await setRemoteDescriptionAndFlush(current, message.sdp)) return;
+  if (pc !== current || stopped) return;
+  try {
+    await current.setLocalDescription(await current.createAnswer());
+    sendSignal({ type: 'answer', sdp: current.localDescription }, socket, current);
+  } catch (e) {}
+}
+
+function connectWS() {
+  if (stopped || isSocketOpen(ws)) return;
+  let socket;
+  try { socket = new WebSocket(WS_URL); } catch (e) {
+    scheduleReconnect();
+    return;
+  }
+  ws = socket;
+  socket.onopen = () => {
+    if (ws !== socket || stopped) return;
+    reconnectAttempts = 0;
+    sendSignal({ type: 'join', role: 'viewer' }, socket);
+  };
+  socket.onclose = () => {
+    if (ws !== socket) return;
+    ws = null;
+    closePeerConnection();
+    if (!stopped) scheduleReconnect();
+  };
+  socket.onerror = () => {};
+  socket.onmessage = (event) => {
+    if (ws !== socket || stopped) return;
+    let message;
+    try { message = JSON.parse(event.data); } catch (e) { return; }
+    if (message.type === 'replaced') {
+      stopped = true;
+      clearReconnect();
+      reconnectAttempts = 0;
+      const replacedSocket = ws;
+      ws = null;
+      closePeerConnection();
+      document.title = 'iphone source — replaced; reload to retry';
+      if (replacedSocket) try { replacedSocket.close(); } catch (e) {}
+      return;
     }
+    if (message.type === 'offer') return handleOffer(message, socket);
+    if (message.type === 'ice' && message.candidate) return receiveRemoteIce(message.candidate);
+    if (message.type === 'peer-left') closePeerConnection();
+    return Promise.resolve();
   };
 }
-connect();
+
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('beforeunload', () => {
+    stopped = true;
+    clearReconnect();
+    const socket = ws;
+    ws = null;
+    if (socket) try { socket.close(); } catch (e) {}
+    closePeerConnection();
+  });
+}
+
+connectWS();
 </script>
 </body>
 </html>

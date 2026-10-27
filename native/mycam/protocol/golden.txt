@@ -1,0 +1,76 @@
+# Golden byte sequences for the MyCam wire protocol (see PROTOCOL.md).
+# Both test suites check against this file:
+#   Android: app/src/test/java/io/github/whoissaaif/mycam/ProtocolTest.kt  (builds packets, parses commands)
+#   Windows: pc/tests/tests.cpp                                   (parses packets, builds commands)
+# Format: name = hex bytes (spaces are ignored). Change both implementations and this file together.
+
+# Phone -> PC packets: magic | type | flags | reserved(2) | ptsUs(8) | length(4) | payload
+packet.hello   = 4D43414D 00 00 0000 0000000000000000 00000002 0001
+packet.config  = 4D43414D 01 00 0000 0000000000000000 0000000C 0780 0438 005A 01 0000000167
+packet.frame   = 4D43414D 02 01 0000 0102030405060708 00000004 DEADBEEF
+packet.orient  = 4D43414D 03 00 0000 0000000000000000 00000002 010E
+packet.state   = 4D43414D 04 00 0000 0000000000000000 00000002 01 01
+packet.state_paused = 4D43414D 04 00 0000 0000000000000000 00000002 03 00
+packet.log     = 4D43414D 05 00 0000 0000000000000000 00000002 6869
+
+# PC -> phone commands: magic | cmd | arg | reserved(2)
+command.hello       = 4D434D44 01 00 0000
+command.start       = 4D434D44 02 00 0000
+command.stop        = 4D434D44 03 00 0000
+command.keyframe    = 4D434D44 04 00 0000
+command.facing_front = 4D434D44 05 01 0000
+command.pause       = 4D434D44 06 00 0000
+command.resume      = 4D434D44 07 00 0000
+
+# v3: camera settings and capabilities (phone -> PC), and the commands that change them (PC -> phone).
+# CAMERA payload: quality | fps | zoom x100 (u16) | zoomMin x100 | zoomMax x100 | ev | evMin | evMax |
+#                 evStep x100 | flags | width (u16) | height (u16) | actual fps
+# here: 1080p, 30 fps, zoom 1.00 (0.60..10.00), EV 0 (-12..+12, step 0.33), flags torch+has60+has4K,
+#       actual 1920x1080 @ 30
+packet.camera  = 4D43414D 06 00 0000 0000000000000000 00000012 01 1E 0064 003C 03E8 00 F4 0C 21 19 0780 0438 1E
+# 1.3.2: the same payload plus one frame-rate mask per quality (720p, 1080p, 4K; 0x01 30, 0x02 60, 0x04 120).
+# here: 1080p, 120 fps, zoom 1.00 (1.00..10.00), flags torch+has60+has4K+has120, actual 1920x1080 @ 120,
+#       720p and 1080p do 30/60/120, 4K only 30
+packet.camera_modes = 4D43414D 06 00 0000 0000000000000000 00000015 01 78 0064 0064 03E8 00 F4 0C 21 59 0780 0438 78 07 07 01
+command.fps_120     = 4D434D44 09 78 0000
+command.quality_4k  = 4D434D44 08 02 0000
+command.fps_60      = 4D434D44 09 3C 0000
+command.zoom_2x     = 4D434D44 0A 14 0000
+command.exposure_m2 = 4D434D44 0B FE 0000
+command.torch_on    = 4D434D44 0C 01 0000
+command.focus_lock  = 4D434D44 0D 01 0000
+
+# Wireless (1.4, phase 2): handshake and record crypto, generated with the JDK (independent of both
+# implementations). Keys are P-256 (raw 0x04|X|Y), ECDH secret is the X coordinate, HKDF-SHA256, AES-256-GCM.
+# See PROTOCOL.md "Wireless security". wifi.sas is the 6-digit code itself (read as text), wifi.transcript is
+# SHA-256("transcript") standing in for a real handshake transcript.
+wifi.hkdf_rfc5869_1 = 3CB25F25FAACD57A90434F64D0362F2A2D2D0A90CF1A5A4C5DB02D56ECC4C5BF34007208D5B887185865
+wifi.pc_private     = 124D41735730858A15584FD504B5B8ADDC0C23E2FC03D63798448B4371A45BA7
+wifi.pc_public      = 0454ED1AD575834D25D88D91FFF9194316BC9ED73F297123AEC213F6C4F0C91DBF873BE9347FA580C9D32213BD529FFEFCC23F5151A5AD31D2B415B250A6595460
+wifi.phone_private  = FB774403FE6FB24AEBC5D3B664C252BD7AC70BA9107FDFBE55DE6AE695FE5C79
+wifi.phone_public   = 0423CC8E84B4985579AF90D5357071B3F48E7FB8BF821EB03EBB75CB8D595950AD34C8CB5D4034959FFDED21E4CE0C8A78912A741B842FFD66F251D0376900A858
+wifi.ecdh           = 0151FC9CEFCE40EB2C09943FF8A64DED7A5F623CBD1A96ED16C851434A5CFB10
+wifi.npc            = 101112131415161718191A1B1C1D1E1F
+wifi.nph            = 202122232425262728292A2B2C2D2E2F
+wifi.na             = A0A1A2A3A4A5A6A7A8A9AAABACADAEAF
+wifi.nb             = B0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF
+wifi.commit         = 2C2B22574AD93DD9D6B5B6EEB81AB4D586023773B7AAB98F4A3F1CE4F6C81D3D
+wifi.sas            = 554294
+wifi.pair_key       = B72398E380FFD6D4CAFF600B60F69D2A499010B95788BA46065C5BF7D4AB8CE1
+wifi.session_okm    = 83CDAD099964724CEB72544972E3078DD9B080F1AE675C84D187A0B8C27496729B91A86978C7B888B6D8141F2EAB0B066DC1A553A06BC4EE356EB560202AE24B0CFD6C074C727914A6731693D1F60CC92097BC3FCD1BD3A55CAC68791AF1BE1D
+wifi.transcript     = 54E6289E14C7B0E7AD9ACC2DFC4C1E3D027D0EEF7F5C4C3FE7C292761D0E06A6
+wifi.finished_pc    = B2877BD27D9F4F84C59CE813F1A4CEC35606484780E12223C94DCFCD9FE40A64
+wifi.finished_phone = D7C3C92F194B3DD8C6DCAEBD92538C67BECAD857BFA1AA923A3A5B9A111A4775
+wifi.record_pc_0    = 0000001AE7D84B5171D64DE66745B4C3269C9E0EE19E6F18A9B0BDC3857C
+wifi.record_phone_7 = 00000010AAC183A1EA5730A70FA1E03E4B9AADDB
+
+# QR pairing (1.5): see PROTOCOL.md "QR pairing". Generated with the JDK. qr.code is the one-time code's 16
+# bytes (qr.code_text is how the QR code spells it: base64url, read as text). With wifi.ecdh, wifi.npc and
+# wifi.nph: qr.pair_key = HKDF(ikm = ecdh | code, salt = Npc | Nph, info = "MyCam qr pair v1", 32).
+# qr.invite_proof = the first 16 bytes of HMAC-SHA256(code, "MyCam qr invite v1" | qr.port).
+qr.code           = 606162636465666768696A6B6C6D6E6F
+qr.code_text      = YGFiY2RlZmdoaWprbG1ubw
+qr.pc_id          = 707172737475767778797A7B7C7D7E7F
+qr.port           = BAB8
+qr.pair_key       = 3D4454FAEC511CDB2208563866692AD20C54748D10C22A4250ECD395124A219E
+qr.invite_proof   = FEC2D6C0FAFAD044CF44C32D8E2BF69A

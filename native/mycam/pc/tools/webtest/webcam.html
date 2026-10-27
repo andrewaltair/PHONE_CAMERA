@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyCam web camera</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; max-width: 640px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 6px 0 12px; opacity: .8; font-size: 14px; }
+  button { font-size: 17px; padding: 12px 18px; border-radius: 10px; border: 0; background: #0a7aff; color: #fff; margin: 4px 6px 4px 0; }
+  button:disabled { opacity: .5; }
+  button.secondary { background: #8884; color: inherit; }
+  video { width: 100%; max-height: 40vh; background: #000; border-radius: 10px; margin-top: 8px; }
+  #status { font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: #8882; padding: 10px; border-radius: 10px; max-height: 45vh; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>MyCam web camera</h1>
+<p>Speaks the MyCam protocol (v3) to the PC. Tap Connect, allow the camera, and keep this page open and the screen on. The PC decides when the camera runs.</p>
+<button id="connect">Connect</button>
+<button id="selftest" class="secondary">Self-test</button>
+<div id="status">not connected</div>
+<video id="video" playsinline muted></video>
+<pre id="out">Ready.</pre>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const out = $("out"), video = $("video"), statusEl = $("status"), connectBtn = $("connect"), selftestBtn = $("selftest");
+video.muted = true; video.playsInline = true;
+
+const MAGIC_PKT = 0x4D43414D;   // "MCAM"
+const MAGIC_CMD = 0x4D434D44;   // "MCMD"
+const T = { HELLO: 0, CONFIG: 1, FRAME: 2, ORIENT: 3, STATE: 4, LOG: 5, CAMERA: 6 };
+const CMD = { HELLO: 1, START: 2, STOP: 3, KEYFRAME: 4, SET_FACING: 5, PAUSE: 6, RESUME: 7,
+              SET_QUALITY: 8, SET_FPS: 9, ZOOM: 10, EXPOSURE: 11, TORCH: 12, FOCUS: 13 };
+const CMD_NAME = Object.fromEntries(Object.entries(CMD).map(([k, v]) => [v, k]));
+const PROTOCOL_VERSION = 3;
+// "upright": Safari delivers upright frames, so CONFIG sensor = 0 and ORIENT = 0 (default).
+// "orient": send the screen angle as ORIENT (try with  /webcam?rot=orient  if frames do not turn with the phone).
+const ROTATION_MODE = new URLSearchParams(location.search).get("rot") === "orient" ? "orient" : "upright";
+
+const log = (line) => {
+  out.textContent += "\n" + line;
+  out.scrollTop = out.scrollHeight;
+};
+const screenAngle = () => (screen.orientation && screen.orientation.angle) || 0;
+
+// ---------------------------------------------------------------- packets (big-endian)
+
+function packet(type, flags, ptsUs, payload) {
+  const buf = new ArrayBuffer(20 + payload.length);
+  const dv = new DataView(buf);
+  dv.setUint32(0, MAGIC_PKT);
+  dv.setUint8(4, type);
+  dv.setUint8(5, flags);
+  dv.setUint16(6, 0);
+  dv.setBigInt64(8, BigInt(ptsUs));
+  dv.setUint32(16, payload.length);
+  new Uint8Array(buf, 20).set(payload);
+  return buf;
+}
+function u16Payload(v) { const p = new Uint8Array(2); new DataView(p.buffer).setUint16(0, v); return p; }
+function helloPacket(version) { return packet(T.HELLO, 0, 0, u16Payload(version)); }
+function configPacket(w, h, sensor, facing, spsPps) {
+  const p = new Uint8Array(7 + spsPps.length);
+  const dv = new DataView(p.buffer);
+  dv.setUint16(0, w); dv.setUint16(2, h); dv.setUint16(4, sensor); dv.setUint8(6, facing);
+  p.set(spsPps, 7);
+  return packet(T.CONFIG, 0, 0, p);
+}
+function framePacket(key, ptsUs, data) { return packet(T.FRAME, key ? 1 : 0, ptsUs, data); }
+function orientPacket(deg) { return packet(T.ORIENT, 0, 0, u16Payload(deg)); }
+function statePacket(state, facing) { return packet(T.STATE, 0, 0, Uint8Array.of(state, facing)); }
+function logPacket(text) { return packet(T.LOG, 0, 0, new TextEncoder().encode(text)); }
+
+function parseCommand(buf) {
+  if (buf.byteLength !== 8) return null;
+  const dv = new DataView(buf);
+  if (dv.getUint32(0) !== MAGIC_CMD) return null;
+  return { cmd: dv.getUint8(4), arg: dv.getUint8(5) };
+}
+
+function hexToBytes(hex) {
+  const clean = hex.replace(/\s+/g, "");
+  if (clean.length % 2 || /[^0-9a-fA-F]/.test(clean)) throw new Error("bad hex: " + hex.slice(0, 20));
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+  return out;
+}
+const bytesToHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("").toUpperCase();
+
+// ---------------------------------------------------------------- self-test against protocol/golden.txt
+
+async function selfTest() {
+  out.textContent = "Self-test against protocol/golden.txt ...";
+  let text;
+  try {
+    const res = await fetch("/golden.txt");
+    if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()));
+    text = await res.text();
+  } catch (e) { log("FAIL: cannot read golden.txt from the server: " + e.message); return; }
+
+  const entries = {};
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/#.*$/, "").trim();
+    const m = /^([A-Za-z0-9_.]+)\s*=\s*(.+)$/.exec(line);
+    if (m && (m[1].startsWith("packet.") || m[1].startsWith("command."))) entries[m[1]] = m[2];
+  }
+
+  const packetBuilders = {
+    "packet.hello": () => helloPacket(1),   // golden.txt uses protocol version 1 here; the page sends 3
+    "packet.config": () => configPacket(0x780, 0x438, 0x5A, 1, Uint8Array.of(0, 0, 0, 1, 0x67)),
+    "packet.frame": () => framePacket(true, 0x0102030405060708n, Uint8Array.of(0xDE, 0xAD, 0xBE, 0xEF)),
+    "packet.orient": () => orientPacket(270),
+    "packet.state": () => statePacket(1, 1),
+    "packet.state_paused": () => statePacket(3, 0),
+    "packet.log": () => logPacket("hi"),
+  };
+  const notYet = new Set(["packet.camera", "packet.camera_modes"]);   // CAMERA packets are not built yet
+  const commands = {   // name -> [cmd, arg]
+    "command.hello": [1, 0], "command.start": [2, 0], "command.stop": [3, 0], "command.keyframe": [4, 0],
+    "command.facing_front": [5, 1], "command.pause": [6, 0], "command.resume": [7, 0],
+    "command.quality_4k": [8, 2], "command.fps_120": [9, 0x78], "command.fps_60": [9, 0x3C],
+    "command.zoom_2x": [10, 0x14], "command.exposure_m2": [11, 0xFE], "command.torch_on": [12, 1],
+    "command.focus_lock": [13, 1],
+  };
+
+  let pass = 0, fail = 0, skipped = 0;
+  for (const [name, hex] of Object.entries(entries)) {
+    let golden;
+    try { golden = hexToBytes(hex); } catch (e) { log("FAIL " + name + ": " + e.message); fail++; continue; }
+    if (name in packetBuilders) {
+      const mine = new Uint8Array(packetBuilders[name]());
+      if (bytesToHex(mine) === bytesToHex(golden)) { log("PASS " + name); pass++; }
+      else { log("FAIL " + name + "\n   golden: " + bytesToHex(golden) + "\n   page:   " + bytesToHex(mine)); fail++; }
+    } else if (name in commands) {
+      const parsed = parseCommand(golden.buffer.slice(golden.byteOffset, golden.byteOffset + golden.byteLength));
+      const [cmd, arg] = commands[name];
+      if (parsed && parsed.cmd === cmd && parsed.arg === arg) { log("PASS " + name); pass++; }
+      else { log("FAIL " + name + ": parsed " + JSON.stringify(parsed) + ", expected cmd " + cmd + " arg " + arg); fail++; }
+    } else if (notYet.has(name)) {
+      log("skip " + name + " (not built yet)"); skipped++;
+    } else {
+      log("FAIL " + name + ": golden.txt has an entry this page does not know. Update the page along with the protocol.");
+      fail++;
+    }
+  }
+  log((fail ? "RESULT: FAIL" : "RESULT: ALL PASS") + " (" + pass + " pass, " + fail + " fail, " + skipped + " skipped)");
+}
+
+// ---------------------------------------------------------------- Annex-B helpers
+
+// SPS (type 7) and PPS (type 8) NAL units, with their start codes, from the start of a key frame.
+function extractSpsPps(data) {
+  const d = data.subarray(0, Math.min(data.length, 1024));
+  const starts = [];
+  for (let i = 0; i + 3 < d.length; i++) {
+    if (d[i] === 0 && d[i + 1] === 0) {
+      if (d[i + 2] === 1) { starts.push({ pos: i, body: i + 3 }); i += 2; }
+      else if (d[i + 2] === 0 && d[i + 3] === 1) { starts.push({ pos: i, body: i + 4 }); i += 3; }
+    }
+  }
+  const parts = [];
+  for (let k = 0; k < starts.length; k++) {
+    const type = d[starts[k].body] & 0x1F;
+    if (type !== 7 && type !== 8) continue;
+    const end = k + 1 < starts.length ? starts[k + 1].pos : d.length;
+    parts.push(d.slice(starts[k].pos, end));
+  }
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const result = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) { result.set(p, o); o += p.length; }
+  return result;
+}
+
+// ---------------------------------------------------------------- encoder settings
+
+function codecFor(w, h, fps) {   // Baseline profile, as in the earlier tests
+  const px = w * h;
+  if (px <= 1280 * 720) return fps <= 30 ? "avc1.42001f" : "avc1.420020";
+  if (px <= 1920 * 1088) return fps <= 30 ? "avc1.420028" : "avc1.42002a";
+  return fps <= 30 ? "avc1.420033" : "avc1.420034";
+}
+function encoderConfig(w, h, fps) {
+  const px = w * h;
+  const base = px >= 3840 * 2160 ? 20e6 : px >= 1920 * 1080 ? 8e6 : 4e6;
+  return {
+    codec: codecFor(w, h, fps), width: w, height: h, framerate: fps,
+    bitrate: Math.round(fps >= 60 ? base * 1.5 : base),
+    latencyMode: "realtime", hardwareAcceleration: "prefer-hardware",
+    avc: { format: "annexb" },
+  };
+}
+
+// ---------------------------------------------------------------- session state
+
+let ws = null;
+let wake = null;
+let phoneState = 0;              // 0 idle, 1 streaming, 2 error, 3 paused
+let wantStreaming = false;       // the PC said START and has not said STOP
+let paused = false;
+const want = { facing: 0, quality: 1, fps: 30 };
+let capture = null;
+let queue = Promise.resolve();
+const tBase = performance.now();
+let lastTs = 0;
+
+function nowUs() {
+  let ts = Math.round((performance.now() - tBase) * 1000);
+  if (ts <= lastTs) ts = lastTs + 1;   // timestamps must keep increasing, also across restarts
+  lastTs = ts;
+  return ts;
+}
+function sendBuf(buf) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(buf); }
+function sendLog(text) { log("log: " + text); sendBuf(logPacket(text)); }
+function sendState() { sendBuf(statePacket(phoneState, want.facing)); }
+function sendOrient() { sendBuf(orientPacket(ROTATION_MODE === "orient" ? screenAngle() : 0)); }
+
+setInterval(() => {
+  const dims = video.videoWidth ? video.videoWidth + "x" + video.videoHeight : "no video";
+  const names = ["idle", "streaming", "error", "paused"];
+  statusEl.textContent = (ws && ws.readyState === WebSocket.OPEN ? "connected" : "not connected") +
+    " | state " + names[phoneState] + " | video " + dims + " | screen angle " + screenAngle() + " | rotation mode " + ROTATION_MODE;
+}, 500);
+
+// ---------------------------------------------------------------- camera + encoder
+
+async function startCapture() {
+  const dims = [[1280, 720], [1920, 1080], [3840, 2160]][want.quality];
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: want.facing ? "user" : "environment" },
+               width: { ideal: dims[0] }, height: { ideal: dims[1] }, frameRate: { ideal: want.fps } },
+    });
+  } catch (e) {
+    sendLog("camera error: " + e.name + " " + e.message);
+    phoneState = 2; sendState();
+    return;
+  }
+  video.srcObject = stream;
+  await video.play();
+  await new Promise((r) => (video.videoWidth ? r() : video.addEventListener("loadedmetadata", r, { once: true })));
+
+  const c = { stream, stop: false, forceKey: true, needConfig: true, inFrames: 0, skipped: 0,
+              reconfiguring: false, w: 0, h: 0, fps: want.fps, sentFrames: 0 };
+  c.enc = new VideoEncoder({
+    output: (chunk) => onChunk(c, chunk),
+    error: (e) => sendLog("encoder error: " + (e.message || e)),
+  });
+  stream.getVideoTracks()[0].addEventListener("ended", () => {
+    if (capture === c) { sendLog("camera track ended"); stopCapture().then(() => { phoneState = 2; sendState(); }); }
+  });
+  try { configureEncoder(c); }
+  catch (e) { sendLog("encoder configure failed: " + (e.message || e)); stream.getTracks().forEach((t) => t.stop()); phoneState = 2; sendState(); return; }
+  capture = c;
+  schedule(c);
+}
+
+function configureEncoder(c) {
+  c.w = video.videoWidth; c.h = video.videoHeight;
+  const settings = c.stream.getVideoTracks()[0].getSettings();
+  c.fps = Math.round(settings.frameRate || want.fps);
+  c.enc.configure(encoderConfig(c.w, c.h, c.fps));
+  c.needConfig = true; c.forceKey = true;
+  sendLog("camera " + c.w + "x" + c.h + "@" + c.fps + ", screen angle " + screenAngle() + ", facing " + want.facing);
+}
+
+function schedule(c) {
+  if (c.stop) return;
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => pump(c));
+  else requestAnimationFrame(() => pump(c));
+}
+
+async function pump(c) {
+  if (c.stop || c.reconfiguring) return;
+  // The picture size changed (for example the phone was turned): finish the old frames, then start a new
+  // encoder configuration. The next key frame will be preceded by a new CONFIG.
+  if (video.videoWidth !== c.w || video.videoHeight !== c.h) {
+    c.reconfiguring = true;
+    try { await c.enc.flush(); } catch (e) { /* ignore */ }
+    if (c.stop) return;
+    try { configureEncoder(c); } catch (e) { sendLog("encoder reconfigure failed: " + (e.message || e)); }
+    c.reconfiguring = false;
+    schedule(c);
+    return;
+  }
+  // Back-pressure: if the link is slower than the encoder, skip frames and restart from a key frame
+  // instead of queueing seconds of video.
+  if ((ws && ws.bufferedAmount > 1_000_000) || c.enc.encodeQueueSize > 3) {
+    c.skipped++; c.forceKey = true;
+    if (c.skipped % 30 === 1) sendLog("back-pressure: skipping frames (" + c.skipped + " so far)");
+    schedule(c);
+    return;
+  }
+  const frame = new VideoFrame(video, { timestamp: nowUs() });
+  c.enc.encode(frame, { keyFrame: c.forceKey || c.inFrames % Math.max(1, c.fps) === 0 });
+  frame.close();
+  c.forceKey = false;
+  c.inFrames++;
+  schedule(c);
+}
+
+function onChunk(c, chunk) {
+  const data = new Uint8Array(chunk.byteLength);
+  chunk.copyTo(data);
+  const key = chunk.type === "key";
+  if (c.needConfig) {
+    if (!key) return;   // wait for a key frame; CONFIG goes out right before it
+    const spsPps = extractSpsPps(data);
+    if (!spsPps.length) sendLog("warning: this key frame has no SPS/PPS in it");
+    sendBuf(configPacket(c.w, c.h, 0, want.facing, spsPps));   // sensor orientation 0: Safari frames are upright
+    c.needConfig = false;
+    phoneState = 1;
+    sendState();
+  }
+  sendBuf(framePacket(key, chunk.timestamp, data));
+  c.sentFrames++;
+}
+
+async function stopCapture() {
+  const c = capture;
+  if (!c) return;
+  c.stop = true;
+  capture = null;
+  try { await c.enc.flush(); } catch (e) { /* ignore */ }
+  try { c.enc.close(); } catch (e) { /* ignore */ }
+  c.stream.getTracks().forEach((t) => t.stop());
+  video.srcObject = null;
+}
+async function restartCapture() { await stopCapture(); await startCapture(); }
+function requestConfigAndKey() { if (capture) { capture.needConfig = true; capture.forceKey = true; } }
+
+// ---------------------------------------------------------------- commands from the PC
+
+async function handleCommand(cmd, arg) {
+  log("PC -> page: " + (CMD_NAME[cmd] || ("cmd " + cmd)) + " arg=" + arg);
+  switch (cmd) {
+    case CMD.HELLO:
+      sendBuf(helloPacket(PROTOCOL_VERSION)); sendState(); sendOrient();
+      break;
+    case CMD.START:
+      wantStreaming = true;
+      if (paused) { sendState(); break; }
+      if (capture) requestConfigAndKey(); else await startCapture();
+      break;
+    case CMD.STOP:
+      wantStreaming = false; paused = false;
+      await stopCapture();
+      phoneState = 0; sendState();
+      break;
+    case CMD.KEYFRAME:
+      requestConfigAndKey();
+      break;
+    case CMD.SET_FACING:
+      want.facing = arg ? 1 : 0;
+      if (capture) await restartCapture(); else sendState();
+      break;
+    case CMD.PAUSE:
+      paused = true;
+      await stopCapture();
+      phoneState = 3; sendState();
+      break;
+    case CMD.RESUME:
+      paused = false;
+      if (wantStreaming) await startCapture(); else { phoneState = 0; sendState(); }
+      break;
+    case CMD.SET_QUALITY:
+      want.quality = Math.min(2, arg);
+      if (capture) await restartCapture();
+      break;
+    case CMD.SET_FPS:
+      want.fps = arg >= 60 ? 60 : 30;
+      if (arg > 60) sendLog("only 30 and 60 fps are offered by this page; using 60");
+      if (capture) await restartCapture();
+      break;
+    default:
+      sendLog("ignored command " + cmd + " (not supported by the page yet)");
+  }
+}
+
+// ---------------------------------------------------------------- connection
+
+async function connect() {
+  connectBtn.disabled = true;
+  out.textContent = "Connecting ...";
+  try { if ("wakeLock" in navigator) wake = await navigator.wakeLock.request("screen"); } catch (e) { /* ignore */ }
+  const socket = new WebSocket("wss://" + location.host + "/webcam-ws" + location.search.replace(/[?&]rot=[^&]*/, ""));
+  socket.binaryType = "arraybuffer";
+  socket.onopen = () => { ws = socket; log("connected. Waiting for the PC to say HELLO ..."); };
+  socket.onerror = () => log("WebSocket error (is the server running, and the certificate accepted?)");
+  socket.onclose = async () => {
+    log("disconnected");
+    wantStreaming = false; paused = false;
+    await stopCapture();
+    phoneState = 0;
+    ws = null;
+    connectBtn.disabled = false;
+    if (wake) { try { await wake.release(); } catch (e) { /* ignore */ } wake = null; }
+  };
+  socket.onmessage = (e) => {
+    if (!(e.data instanceof ArrayBuffer)) return;
+    const c = parseCommand(e.data);
+    if (!c) { sendLog("bad command message (" + e.data.byteLength + " bytes)"); return; }
+    queue = queue.then(() => handleCommand(c.cmd, c.arg)).catch((err) => sendLog("command failed: " + (err.message || err)));
+  };
+}
+
+function reportRotation() {
+  sendLog("screen angle " + screenAngle() + ", video " + video.videoWidth + "x" + video.videoHeight);
+  sendOrient();
+}
+if (screen.orientation) {
+  screen.orientation.addEventListener("change", () => { reportRotation(); setTimeout(reportRotation, 800); });
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) sendLog("page hidden: iOS will stop the camera"); });
+
+connectBtn.addEventListener("click", connect);
+selftestBtn.addEventListener("click", selfTest);
+</script>
+</body>
+</html>
