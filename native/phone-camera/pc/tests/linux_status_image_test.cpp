@@ -1,12 +1,19 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <string_view>
 
 #include "../companion/linux_status_frame.h"
 #include "../companion/marquee.h"
 
 int main() {
     using namespace mycam;
+    const std::string_view texts[] = {kWaitingBrandText,      kWaitingHeadlineText, kWaitingConnectText,
+                                      kWaitingAndroidText,     kWaitingIphoneText,    kWaitingProgressText};
+    for (const std::string_view text : texts)
+        for (const char c : text)
+            if (c != ' ' && !LinuxWaitingGlyphAvailable(c)) return 1;
+
     const Nv12Image base = BuildPhoneCameraWaitingFrame();
     if (base.width != kLinuxWaitingFrameWidth || base.height != kLinuxWaitingFrameHeight) return 1;
     if (base.data.size() != size_t(base.width) * base.height * 3 / 2) return 1;

@@ -75,6 +75,7 @@ Glyph GlyphFor(char c) {
     case 'N': return {{0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}};
     case 'O': return {{0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}};
     case 'P': return {{0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}};
+    case 'Q': return {{0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D}};
     case 'R': return {{0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}};
     case 'T': return {{0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}};
     case 'U': return {{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}};
@@ -84,6 +85,15 @@ Glyph GlyphFor(char c) {
     case 'S': return {{0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}};
     case '_': return {{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F}};
     default: return {{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
+    }
+}
+
+bool GlyphAvailable(char c) {
+    switch (c) {
+    case 'A': case 'B': case 'C': case 'D': case 'E': case 'F': case 'G': case 'H': case 'I':
+    case 'M': case 'N': case 'O': case 'P': case 'Q': case 'R': case 'S': case 'T': case 'U':
+    case 'W': case 'Y': case '-': case '_': case ' ': return true;
+    default: return false;
     }
 }
 
@@ -101,6 +111,8 @@ void Text(Nv12Image& image, std::string_view text, int x, int y, int scale, Yuv 
 }
 
 } // namespace
+
+bool LinuxWaitingGlyphAvailable(char c) { return GlyphAvailable(c); }
 
 Nv12Image BuildPhoneCameraWaitingFrame() {
     Nv12Image image;
@@ -125,14 +137,14 @@ Nv12Image BuildPhoneCameraWaitingFrame() {
     Rect(image, 212, 143, 54, 54, white);
     Rect(image, 260, 155, 32, 30, white);
     Rect(image, 220, 151, 38, 38, Rgb(57, 95, 139));
-    Text(image, "PHONE_CAMERA", 330, 121, 6, white);
-    Text(image, "WAITING FOR YOUR PHONE", 418, 184, 4, muted);
+    Text(image, kWaitingBrandText, 330, 121, 6, white);
+    Text(image, kWaitingHeadlineText, 418, 184, 4, muted);
 
     Rect(image, 260, 286, 760, 334, Rgb(89, 133, 177));
     Rect(image, 262, 288, 756, 330, panelInner);
-    Text(image, "CONNECT YOUR PHONE", 418, 326, 4, white);
-    Text(image, "ANDROID USB OR WI-FI", 434, 376, 3, muted);
-    Text(image, "IPHONE SCAN QR CODE", 438, 414, 3, muted);
+    Text(image, kWaitingConnectText, 418, 326, 4, white);
+    Text(image, kWaitingAndroidText, 434, 376, 3, muted);
+    Text(image, kWaitingIphoneText, 438, 414, 3, muted);
 
     // This is the locked marquee track: x=490, y=447, w=300, h=18 in the
     // 1280x720 reference frame. DrawMarquee restores and animates this exact
@@ -142,7 +154,7 @@ Nv12Image BuildPhoneCameraWaitingFrame() {
     Rect(image, kMarqueeTrackX, kMarqueeTrackY + kMarqueeTrackH - 2, kMarqueeTrackW, 2, Rgb(172, 184, 198));
     Rect(image, kMarqueeTrackX, kMarqueeTrackY, 2, kMarqueeTrackH, Rgb(172, 184, 198));
     Rect(image, kMarqueeTrackX + kMarqueeTrackW - 2, kMarqueeTrackY, 2, kMarqueeTrackH, Rgb(172, 184, 198));
-    Text(image, "WAITING FOR CONNECTION", 430, 507, 3, muted);
+    Text(image, kWaitingProgressText, 430, 507, 3, muted);
     return image;
 }
 
